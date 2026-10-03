@@ -1,0 +1,11 @@
+# Where to look. Add URLs as you find good ones.
+hn:
+  enabled: true
+  threads: ["Who is hiring", "Freelancer? Seeking freelancer?", "Ask HN"]
+  lookback_days: 30
+job_pages: []          # career page or job post URLs to watch
+agency_candidates: []  # agency websites you found (Clutch, Shopify Partners) — added by hand
+pagespeed:
+  enabled: true        # needs PAGESPEED_API_KEY in .env (free)
+manual:
+  enabled: true        # always works: desk.py add-lead --url ...

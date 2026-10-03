@@ -1,0 +1,7 @@
+# Follow-up schedule (business days after first message)
+followup_days: [3, 7, 14, 24]
+max_touches: 5
+each_followup_must_add: "a new fact, a mini idea, or a relevant example — never just 'bumping this'"
+stop_on: [any_reply, opt_out, bounce, max_touches, manual_stop]
+not_now_default_days: 60
+stale_after_days: 21

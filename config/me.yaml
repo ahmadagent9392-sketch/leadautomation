@@ -1,0 +1,17 @@
+# Who you are. Empty fields are OK for now: Ahmad sets them later in the dashboard (Stage 8).
+# scripts/config_check.py shows a warning for empty fields; --strict (before outreach) makes them errors.
+name: "Ahmad"
+business_name: ""            # e.g. "Ahmad Automation Studio"
+role: "AI automation developer"
+location: "Pakistan"
+timezone: "Asia/Karachi"
+working_hours_for_clients: "US/UK mornings"
+email_signature: |
+  Ahmad
+  
+postal_address: ""           # required in every cold email footer (CAN-SPAM). A business/virtual address is fine.
+skills: []                   # e.g. ["n8n", "Zapier", "Python", "chatbots", "Google Sheets", "WhatsApp API"]
+portfolio_links: []          # demo videos, GitHub, case studies
+standing_instructions:
+  - "Never send anything. Only drafts."
+  - "Keep messages short and specific."

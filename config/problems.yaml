@@ -1,0 +1,44 @@
+# Problem patterns = what the Scout looks for.
+# These two are STARTER EXAMPLES. Ahmad will edit/add patterns later in the dashboard (Stage 8)
+# or save new ones from /search-idea (Stage 7).
+patterns:
+  - id: "manual-data-entry"
+    offer_id: "offer-1"
+    description: "Small businesses paying people to copy data between apps by hand"
+    keywords: ["data entry", "copy and paste", "update spreadsheet", "virtual assistant", "manual entry", "admin assistant"]
+    require_tool_names: true          # stronger if the post names the apps (Shopify, QuickBooks, HubSpot...)
+    signals:
+      - {type: help_request,  tier: 1, decay_days: 14}   # someone asking for help (Upwork, HN, r/forhire)
+      - {type: job_post,      tier: 1, decay_days: 45}   # hiring for the work you can automate
+      - {type: role_reposted, tier: 1, decay_days: 90}
+      - {type: bad_review,    tier: 2, decay_days: 120}  # reviews showing slow/lost service
+      - {type: website_issue, tier: 2, decay_days: 180}  # slow site, broken form
+      - {type: funding_or_growth, tier: 2, decay_days: 120}  # only a "why now" bonus, never enough alone
+    owner_roles: ["founder", "owner", "operations manager", "office manager"]
+    disqualifiers:
+      - "staffing agency posting for a client"
+      - "role needs on-site physical work"
+      - "enterprise over 1000 staff"
+    angles: ["observation", "mini_teardown", "similar_case", "breakup"]
+    min_value_band: 2
+
+  - id: "missed-leads-slow-replies"
+    offer_id: "offer-1"
+    description: "Small businesses that miss calls, web forms or messages, or reply too slowly, and lose customers"
+    keywords: ["receptionist", "appointment setter", "lead follow up", "missed calls", "answer inquiries",
+               "speed to lead", "inbound leads", "call back", "front desk", "customer inquiries"]
+    require_tool_names: false
+    signals:
+      - {type: help_request,  tier: 1, decay_days: 14}   # "we can't keep up with inquiries"
+      - {type: job_post,      tier: 1, decay_days: 45}   # hiring receptionist / appointment setter / lead responder
+      - {type: role_reposted, tier: 1, decay_days: 90}
+      - {type: bad_review,    tier: 2, decay_days: 120}  # "never called back", "no reply to my message"
+      - {type: website_issue, tier: 2, decay_days: 180}  # broken contact form, no booking option
+      - {type: funding_or_growth, tier: 2, decay_days: 120}  # only a "why now" bonus, never enough alone
+    owner_roles: ["owner", "founder", "office manager", "operations manager", "sales manager"]
+    disqualifiers:
+      - "call center or staffing agency posting for a client"
+      - "role is mainly in-person front desk work"
+      - "enterprise over 1000 staff"
+    angles: ["observation", "mini_teardown", "similar_case", "breakup"]
+    min_value_band: 2

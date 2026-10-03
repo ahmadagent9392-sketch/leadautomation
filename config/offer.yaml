@@ -1,0 +1,20 @@
+# Your offer(s). Not decided yet: Ahmad sets the offer per client, later in the dashboard (Stage 8).
+# Empty fields = warnings in config_check. Before outreach (Stage 5) config_check --strict must pass.
+status: "not_decided"      # not_decided | decided
+offers:
+  - id: "offer-1"
+    name: ""                 # e.g. "Booking-to-Sheet Automation"
+    problem: ""              # the exact problem you fix
+    customer: ""             # e.g. "dental clinics with 3-20 staff in US/UK/AU"
+    result: ""               # what they get at the end
+    pricing: "custom"         # custom = price decided per client; fixed = use price_usd
+    price_usd: 0
+    delivery_days: 0
+    monthly_upkeep_usd: 0    # optional retainer
+    proof:                   # MUST have at least one item before outreach
+      - title: ""
+        link: ""
+    not_a_fit:               # who you will NOT work with
+      - "jobs under $150"
+      - "unpaid test tasks"
+      - "companies over 1000 staff"

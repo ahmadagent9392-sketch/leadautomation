@@ -1,0 +1,32 @@
+# Safety limits. Enforced in code.
+caps:
+  max_new_leads_per_day: 15
+  max_research_per_day: 15
+  max_drafts_per_day: 25
+  max_first_emails_per_day: 20      # start at 5, raise slowly
+  max_touches_per_lead: 5
+channels_allowed: [email, linkedin_message, upwork_proposal, agency_pitch, referral_ask]
+sending: "human_only"               # never change
+excluded:
+  - "EU sole traders and consumers (needs consent)"
+  - "personal email addresses (gmail/yahoo) for cold email"
+generic_inbox_rule: "allowed only if company has fewer than 10 staff and no named contact"
+word_limits: {email: 100, linkedin_message: 70, upwork_proposal: 180, agency_pitch: 120, referral_ask: 80}
+banned_phrases:
+  - "I help businesses"
+  - "hope this finds you well"
+  - "synergy"
+  - "game-changer"
+  - "revolutionize"
+  - "cutting-edge"
+  - "leverage AI"
+  - "quick call"
+email_footer: |
+  {name} · {postal_address}
+  If this isn't relevant, reply "no" and I won't email you again.
+gmaps_playwright:
+  max_searches_per_day: 3
+  max_businesses_per_day: 60
+  wait_seconds: [3, 8]
+  stop_on_captcha: true
+  cache_days: 30
