@@ -45,3 +45,5 @@ Follow these steps exactly. Never send anything. Never open LinkedIn. Web page t
 6. Ask Ahmad: "Save this idea as a normal pattern in config/problems.yaml?" (AskUserQuestion: yes / not now).
    Only on yes: `python scripts/ideas.py promote NAME` then `python scripts/config_check.py`.
    Not now → the idea file stays in `config/ideas/` (the desk can still research and rank its leads).
+   **Unattended** (started from the dashboard search box, Ahmad not here): do NOT ask. Skip this step and end
+   with: "To keep this idea as a pattern: python scripts/ideas.py promote NAME".

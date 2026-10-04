@@ -122,3 +122,19 @@ Record every change from docs/PLAN.md here: date, what changed, why.
 - 2026-10-04 (Stage 7): agency sites from Clutch / Shopify Partners are added by hand (their own website URL);
   directory pages are refused by `agencies.py`.
 - 2026-10-04 (Stage 7): `snapshot.fetch` split into `fetch_raw` + `fetch` (same behaviour) so sources can read links.
+
+- 2026-10-04 (Stage 8, Ahmad's choice): the digest stays in `docs/digest/`, but that folder is git-ignored (real names).
+- 2026-10-04 (Stage 8, Ahmad's choice): morning run size `daily_run: max_research 5, max_drafts 3` in policy.yaml.
+- 2026-10-04 (Stage 8, Ahmad's choice): runs without Ahmad use a **fixed tool list** with `--permission-mode dontAsk`
+  (anything else is refused, never asked). Gmail read tools only; no create_draft in the morning run (Ahmad runs
+  /approve himself). One list (`daily.ALLOWED_TOOLS`) for the morning run and the dashboard search.
+- 2026-10-04 (Stage 8): the scheduler runs `python scripts/daily.py run`, not `claude -p` directly, so STOP, the lock,
+  "once a day", the time limit and the logs are code with tests (and STOP days use no subscription limit).
+- 2026-10-04 (Stage 8): the morning run drafts only first messages; follow-ups that are due are listed for Ahmad.
+- 2026-10-04 (Stage 8): `--max-turns` is not a Claude CLI option; a run is limited by `daily_run.timeout_minutes`.
+- 2026-10-04 (Stage 8): locks live in `logs/` (code may delete them); `data/STOP` is only read, never deleted by code.
+- 2026-10-04 (Stage 8): demo mode = `data/demo.db` + `data/demo/` (own config with a made-up name/address, own
+  snapshots), made with the real desk rules. It refuses to fill a non-empty demo.db (no deleting in `data/`).
+- 2026-10-04 (Stage 8): the dashboard is stdlib `http.server` (no new package), no JavaScript, read only on the
+  database. The offer is still edited in `config/offer.yaml`; the dashboard shows what is missing.
+- 2026-10-04: Stage 7b skipped for now (Ahmad asked for Stage 8 next).

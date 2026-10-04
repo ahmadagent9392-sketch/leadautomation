@@ -6,3 +6,4 @@ cards/
 __pycache__/
 .venv/
 .pytest_cache/
+docs/digest/

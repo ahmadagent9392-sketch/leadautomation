@@ -12,7 +12,7 @@ Claude Code updates this file at the end of every stage.
 | 5 | Writer + Critic + Gmail drafts | built, waiting for Ahmad's checks | 2026-10-04 |
 | 6 | Follow-ups + reply reader | built, waiting for Ahmad's checks | 2026-10-04 |
 | 7 | Scout: automatic finding | built, waiting for Ahmad's checks (Places key for reviews) | 2026-10-04 |
-| 8 | Daily run + dashboard + schedule | not started | |
+| 8 | Daily run + dashboard + schedule | built, waiting for Ahmad's checks (3 mornings) | 2026-10-04 |
 | 9 | Use for 2–3 weeks + weekly report | not started | |
 
 ## Notes
@@ -371,3 +371,71 @@ In Claude Code:
 
 **Next:** Ahmad sets up the Places key, runs the checks above, then `git commit -m "stage 7"`.
 Then Stage 7b or 8 when Ahmad asks.
+
+### Stage 8 — Daily run + dashboard + schedule (2026-10-04)
+(Stage 7b is skipped for now. Ahmad asked for Stage 8.)
+
+**Built**
+- `/daily-run` (`.claude/commands/daily-run.md`): STOP check → /sync (Gmail read only) → /discover → /research up to
+  5 new leads → /cards → /draft for the top 3 qualified leads (first messages only) → /today → notes → digest.
+  It never asks questions (it skips and writes "do by hand"), never sends, never makes Gmail drafts, never runs /approve.
+- `scripts/daily.py` — the safe wrapper (rules in code):
+  - `check`: stops if `data/STOP` exists, if another run is going (`logs/run.lock`; a lock older than 3 h is ignored),
+    or if a good run already finished today (`--force` runs again). `check --inside` (used by /daily-run): STOP +
+    how much research / drafting is still allowed today.
+  - `run`: runs `claude -p "/daily-run" --permission-mode dontAsk --allowedTools <fixed list>` with a time limit.
+    Fixed list: `python scripts/*`, Read/Glob/Grep, writing only in `data/` and `logs/`, subagents, web search/fetch,
+    Gmail **read** tools. No send / forward / reply / create_draft. guard.py still runs.
+  - Each run: `logs/daily-YYYY-MM-DD-HHMM.log` + one line in `logs/runs.jsonl` (minutes, steps, API-equal cost).
+  - `runs`: the last 10 runs.
+- `scripts/digest.py`: `docs/digest/YYYY-MM-DD.md` (needs-you list, new leads, research, top 5 cards, drafts,
+  numbers, run notes). `docs/digest/` is git-ignored (real names).
+- `scripts/dashboard.py`: http://127.0.0.1:8765, only on this PC. Today, Pipeline, Numbers (drafted, sent, replies,
+  positive, meetings, won: last 7 days + all time), Cards, Ideas searched (found / leads / good leads), Morning runs
+  (time, minutes, cost note), Things to decide (config warnings), STOP banner.
+  - **Search box**: starts `claude -p "/search-idea ..."` in the background (same fixed tool list), shows
+    "Searching…", the page refreshes by itself. One search at a time, not during the morning run, not when STOP.
+  - Safety: listens on 127.0.0.1 only; secret token in the form; Host header check; idea text checked (letters,
+    numbers, `, . ' ( ) / + -`, max 200) and never goes through a shell; all text HTML-escaped; no JavaScript.
+- `scripts/demo.py`: `data/demo.db` + `data/demo/` with 14 made-up businesses (`.example` domains, "(demo)" names,
+  fake me/offer) in every stage, made with the real desk rules. Refuses if demo.db already has data.
+  `--demo` works on `desk.py`, `today.py`, `digest.py`, `dashboard.py`. Demo never opens the real database.
+- `scripts/schedule_windows.ps1`: `-On` (daily 07:30 Asia/Karachi, "run after a missed start", only when you are
+  logged in, output to `logs/scheduler.log`), `-Off`, `-Status`, `-RunNow`, `-Remove`.
+- `config/policy.yaml`: `daily_run: max_research 5, max_drafts 3, timeout_minutes 90` (checked by config_check;
+  cannot go above the daily caps).
+- `/research` and `/search-idea`: "unattended" rules (no waiting for a paste, no promote question).
+- Tests: `test_daily.py`, `test_dashboard.py`, `test_demo.py` (demo + digest), more in `test_config.py`.
+- Live check done: demo dashboard in the browser OK; real dashboard OK (database empty).
+
+**How to test**
+```
+python -m pytest -q                                  # 765 passed, 2 xfailed
+python scripts/dashboard.py --demo                   # open http://127.0.0.1:8765 -> only "(demo)" businesses
+python scripts/dashboard.py                          # your real data (Ctrl+C to stop)
+python scripts/daily.py check                        # "OK to run."
+```
+1. STOP test (PowerShell): `New-Item data\STOP` → `python scripts/daily.py check` → "STOPPED". Then delete
+   `data\STOP` yourself.
+2. One run by hand: `python scripts/daily.py run` (takes a while). Then read `logs/daily-....log` and
+   `docs/digest/<today>.md`. Check: nothing new in Gmail Sent, no new Gmail drafts.
+3. Turn on the schedule: `powershell -ExecutionPolicy Bypass -File scripts\schedule_windows.ps1 -On`, then `-Status`.
+4. Next morning: `python scripts/daily.py runs` shows a new line; the dashboard "Morning runs" shows it.
+   Do this for 3 mornings.
+5. Dashboard search: type "dental clinics that need booking automation" → "Searching…" → later the idea shows
+   under "Ideas searched" with its leads.
+6. Turn off: `scripts\schedule_windows.ps1 -Off` (or create `data\STOP` for a quick pause).
+
+**Known issues**
+- The first real run must show if the claude.ai Gmail connector works in `claude -p`. If not, the notes say
+  "Gmail sync skipped - run /sync by hand".
+- If a needed tool is missing from the fixed list, that step fails (it is not asked). Read the log and tell Claude;
+  the list is `ALLOWED_TOOLS` in `scripts/daily.py`.
+- The PC must be on and you must be logged in. A missed 07:30 runs when the PC is on again.
+- The dashboard search runs inside the dashboard: closing the dashboard stops a running search.
+- To make the demo again: delete `data/demo.db` and `data/demo/` yourself, then `python scripts/demo.py`.
+- "API-equal cost" is what the run would cost on the API. You pay the subscription; it only shows how heavy a run is.
+- Stage 5 known issues (guard gaps for `send_draft` and Apollo) are still open.
+
+**Next:** Ahmad does the checks above for 3 mornings, then `git commit -m "stage 8"`. Version 1 is complete.
+Then Stage 7b or Stage 9 when Ahmad asks.

@@ -4,7 +4,7 @@
 
 Usage:
     python scripts/today.py
-Also takes --backend supabase|sqlite and --db PATH (like desk.py).
+Also takes --backend supabase|sqlite, --db PATH and --demo (like desk.py).
 """
 from __future__ import annotations
 
@@ -172,11 +172,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="What needs Ahmad today.")
     parser.add_argument("--backend", choices=["supabase", "sqlite"], default=None)
     parser.add_argument("--db", type=Path, default=None)
+    parser.add_argument("--demo", action="store_true", help="made-up businesses only (data/demo.db)")
     args = parser.parse_args(argv)
     store = None
     try:
-        store = db.open_store(args.backend, args.db)
-        desk = db.Desk(store)
+        store = db.open_store(args.backend, args.db, demo=args.demo)
+        desk = db.Desk(store, **db.desk_options(args.demo))
         sections = report(desk)
         day = desk.today()
     except db.DeskError as exc:

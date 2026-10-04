@@ -21,5 +21,13 @@ Scout → Researcher → Checker → Rank → Writer → Critic → Human approv
 ## Status
 See `docs/PROGRESS.md`.
 
+## Daily use
+- `python scripts/dashboard.py` → http://127.0.0.1:8765 (only on this PC): today's tasks, cards, pipeline, numbers,
+  "Search an idea" box.
+- Morning run: `python scripts/daily.py run` (Claude Code `/daily-run`, fixed tool list, never sends).
+  Windows schedule: `scripts/schedule_windows.ps1 -On | -Off | -Status`. Pause everything: create `data/STOP`.
+
 ## Demo
-Run with `--demo` to use made-up sample businesses. No real prospect data is published in this repo.
+`python scripts/demo.py` fills `data/demo.db` with made-up sample businesses (`.example` domains).
+Then `python scripts/dashboard.py --demo` (every desk command also takes `--demo`).
+No real prospect data is published in this repo.

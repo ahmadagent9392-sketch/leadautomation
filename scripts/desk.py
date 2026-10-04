@@ -48,7 +48,7 @@ Sent, replies, follow-ups (Stage 6, used by /sync and /today; nothing is ever se
     python scripts/desk.py followups [--due]
 
 Every command also takes --backend supabase|sqlite (default: DESK_BACKEND in .env, else supabase)
-and --db PATH (sqlite only, default data/desk.db).
+and --db PATH (sqlite only, default data/desk.db). --demo = made-up businesses (data/demo.db, scripts/demo.py).
 Exit code: 0 = OK, 1 = refused or error.
 """
 from __future__ import annotations
@@ -575,6 +575,7 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--backend", choices=["supabase", "sqlite"], default=None,
                         help="database (default: DESK_BACKEND in .env, else supabase)")
     common.add_argument("--db", type=Path, default=None, help="SQLite file (sqlite backend only)")
+    common.add_argument("--demo", action="store_true", help="made-up businesses only (data/demo.db)")
 
     parser = argparse.ArgumentParser(description="Opportunity Desk: add and track leads.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -758,8 +759,8 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     store = None
     try:
-        store = db.open_store(args.backend, args.db)
-        return COMMANDS[args.command](db.Desk(store), args)
+        store = db.open_store(args.backend, args.db, demo=args.demo)
+        return COMMANDS[args.command](db.Desk(store, **db.desk_options(args.demo)), args)
     except REFUSED as exc:
         print(f"REFUSED: {exc}")
         return 1

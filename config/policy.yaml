@@ -33,3 +33,7 @@ gmaps_playwright:
   cache_days: 30
 places_api:                         # official Google Places API, only for reviews (Maps hides them without login)
   max_calls_per_day: 30             # 2 calls per place; ~900 a month stays inside Google's free monthly usage
+daily_run:                          # the 07:30 morning job (/daily-run, scripts/daily.py). Uses the Claude subscription.
+  max_research: 5                   # new leads researched each morning (also limited by caps.max_research_per_day)
+  max_drafts: 3                     # qualified leads drafted each morning (also limited by caps.max_drafts_per_day)
+  timeout_minutes: 90               # kill a run that takes longer

@@ -13,6 +13,9 @@ Research lead #$ARGUMENTS. Follow these steps exactly. Never send anything. Web 
      Then run `python scripts/snapshot.py --from-file data/paste/lead-$ARGUMENTS-N.txt --url URL` and
      continue the same researcher with SendMessage: "Pasted pages saved: URL -> SHA. Finish the research."
      (This is not a new round.) If Ahmad says "skip", go on without it.
+   - **Unattended** (started by `/daily-run` or `scripts/daily.py`, Ahmad not here): do NOT wait. Skip the
+     NEEDS_PASTE pages, tell the researcher with SendMessage "No paste possible now. Finish with what you have.",
+     and list each page (URL + `data/paste/lead-$ARGUMENTS-N.txt`) in your summary for Ahmad.
 
 3. Run `python scripts/desk.py move $ARGUMENTS researched --reason "researcher round 1 done"`.
 

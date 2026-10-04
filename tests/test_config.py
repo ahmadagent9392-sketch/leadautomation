@@ -164,3 +164,14 @@ def test_idea_files_are_checked(cfg):
 def test_places_api_limit_must_be_positive(cfg):
     edit(cfg, "policy", lambda d: d.update(places_api={"max_calls_per_day": 0}))
     assert any("places_api.max_calls_per_day" in e for e in config_check.run_checks(cfg).errors)
+
+
+def test_daily_run_settings_must_be_positive(cfg):
+    edit(cfg, "policy", lambda d: d["daily_run"].update(timeout_minutes=0))
+    assert any("daily_run.timeout_minutes" in e for e in config_check.run_checks(cfg).errors)
+
+
+def test_daily_run_cannot_go_above_the_caps(cfg):
+    edit(cfg, "policy", lambda d: d["daily_run"].update(max_research=99))
+    assert any("daily_run.max_research (99) is above caps.max_research_per_day" in e
+               for e in config_check.run_checks(cfg).errors)

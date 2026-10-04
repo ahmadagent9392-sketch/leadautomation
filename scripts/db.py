@@ -29,6 +29,8 @@ ENV_FILE = ROOT / ".env"
 DEFAULT_SQLITE = ROOT / "data" / "desk.db"
 DEFAULT_SNAPSHOTS = ROOT / "data" / "snapshots"
 DEFAULT_CARDS = ROOT / "cards"
+DEMO_SQLITE = ROOT / "data" / "demo.db"            # --demo: made-up businesses only (scripts/demo.py)
+DEMO_DIR = ROOT / "data" / "demo"                  # demo config + snapshots
 
 TABLES = ("companies", "opportunities", "snapshots", "evidence", "people", "messages",
           "replies", "follow_ups", "approvals", "suppression", "events", "raw_items")
@@ -1480,7 +1482,27 @@ def message_id(text) -> int:
         raise DeskError(f"'{text}' is not a draft id (like 12 or M12)") from None
 
 
-def open_store(backend: str | None = None, db_path: Path | None = None, env_file: Path | None = None) -> Store:
+def demo_config_dir(demo_dir: Path | None = None) -> Path:
+    """Config of demo mode: a copy of config/ with a made-up name and address (written by scripts/demo.py)."""
+    path = (demo_dir or DEMO_DIR) / "config"
+    if not (path / "policy.yaml").exists():
+        raise ConfigError("no demo data yet. Run: python scripts/demo.py")
+    return path
+
+
+def desk_options(demo: bool) -> dict:
+    """Desk(...) settings for --demo: demo config and demo snapshots. {} = the real ones."""
+    return {"config_dir": demo_config_dir(), "snapshot_dir": DEMO_DIR / "snapshots"} if demo else {}
+
+
+def open_store(backend: str | None = None, db_path: Path | None = None, env_file: Path | None = None,
+               demo: bool = False) -> Store:
+    if demo:                                       # never the real database
+        from store_sqlite import SqliteStore
+        path = db_path or DEMO_SQLITE
+        if not Path(path).exists():
+            raise ConfigError("no demo data yet. Run: python scripts/demo.py")
+        return SqliteStore(path)
     env = load_env(env_file)
     backend = (backend or env.get("DESK_BACKEND") or "supabase").lower()
     if backend == "sqlite":

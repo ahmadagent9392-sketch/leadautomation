@@ -199,6 +199,17 @@ def check_policy(policy: dict, r: Report) -> None:
         r.error("policy", "'banned_phrases' is empty")
     if is_empty(policy.get("email_footer")):
         r.error("policy", "'email_footer' is empty")
+    run = policy.get("daily_run")
+    if run is not None:                      # Stage 8 morning job (optional: scripts/daily.py has defaults)
+        if not isinstance(run, dict):
+            r.error("policy", "'daily_run' must be a list of settings")
+            return
+        for key in ("max_research", "max_drafts", "timeout_minutes"):
+            if run.get(key) is not None and not is_positive_int(run.get(key)):
+                r.error("policy", f"daily_run.{key} must be a whole number above 0")
+        for key, cap in (("max_research", "max_research_per_day"), ("max_drafts", "max_drafts_per_day")):
+            if is_positive_int(run.get(key)) and is_positive_int(caps.get(cap)) and run[key] > caps[cap]:
+                r.error("policy", f"daily_run.{key} ({run[key]}) is above caps.{cap} ({caps[cap]})")
 
 
 def check_cadence(cadence: dict, r: Report) -> None:
