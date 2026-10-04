@@ -97,8 +97,8 @@ def check_url(url: str) -> None:
                            "Ahmad looks them up by hand (add a 'look up by hand' unknown).")
 
 
-def fetch(url: str, transport: httpx.BaseTransport | None = None) -> tuple[int, str, str]:
-    """Downloads one page. Returns (http_status, title, text)."""
+def fetch_raw(url: str, transport: httpx.BaseTransport | None = None) -> tuple[int, str, str, str]:
+    """Downloads one page. Returns (http_status, content type, raw body text, final URL after redirects)."""
     check_url(url)
     paste_hint = f"Paste the page text into a file and run: snapshot.py --from-file FILE --url {url}"
     try:
@@ -114,6 +114,7 @@ def fetch(url: str, transport: httpx.BaseTransport | None = None) -> tuple[int, 
                 status = resp.status_code
                 ctype = resp.headers.get("content-type", "").lower()
                 encoding = resp.encoding or "utf-8"
+                final_url = str(resp.url)
     except httpx.HTTPError as exc:
         raise db.DeskError(f"cannot download the page ({type(exc).__name__}). {paste_hint}") from exc
 
@@ -123,8 +124,13 @@ def fetch(url: str, transport: httpx.BaseTransport | None = None) -> tuple[int, 
         raise db.DeskError(f"page not found or broken (HTTP {status}). Check the link.")
     if ctype and not any(t in ctype for t in ("text/html", "text/plain", "xhtml")):
         raise db.DeskError(f"not a web page ({ctype.split(';')[0]}). {paste_hint}")
+    return status, ctype, body.decode(encoding, errors="replace"), final_url
 
-    raw = body.decode(encoding, errors="replace")
+
+def fetch(url: str, transport: httpx.BaseTransport | None = None) -> tuple[int, str, str]:
+    """Downloads one page. Returns (http_status, title, text)."""
+    paste_hint = f"Paste the page text into a file and run: snapshot.py --from-file FILE --url {url}"
+    status, ctype, raw, _ = fetch_raw(url, transport)
     title, text = html_to_text(raw) if "plain" not in ctype else ("", clean_text(raw))
     lowered = text[:3000].lower()
     if len(text) < MIN_TEXT_CHARS and any(h in lowered for h in BLOCK_HINTS):

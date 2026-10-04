@@ -11,7 +11,7 @@ Claude Code updates this file at the end of every stage.
 | 4 | Ranking + opportunity cards | built, waiting for Ahmad's checks | 2026-10-04 |
 | 5 | Writer + Critic + Gmail drafts | built, waiting for Ahmad's checks | 2026-10-04 |
 | 6 | Follow-ups + reply reader | built, waiting for Ahmad's checks | 2026-10-04 |
-| 7 | Scout: automatic finding | not started | |
+| 7 | Scout: automatic finding | built, waiting for Ahmad's checks (Places key for reviews) | 2026-10-04 |
 | 8 | Daily run + dashboard + schedule | not started | |
 | 9 | Use for 2–3 weeks + weekly report | not started | |
 
@@ -302,3 +302,72 @@ Full loop by hand (needs one approved email; see Stage 5 — the offer + postal 
 
 **Next:** Ahmad commits Stage 5 (`git commit -m "stage 5"`) if not done, runs the checks above, then
 `git commit -m "stage 6"`. Then Stage 7 when Ahmad asks.
+
+### Stage 7 — Scout: automatic finding (2026-10-04)
+**Built**
+- New table `raw_items` = posts and places the sources found, before the Scout decides (status new / kept /
+  rejected / expired). New column `opportunities.idea`. Applied to Supabase (migration `stage7_raw_items`);
+  `schema.sql` + SQLite store updated. `desk.py init` -> "12 tables".
+- Sources (`scripts/sources/`). Each saves found items; the same URL is never saved twice; LinkedIn is never opened:
+  - `hn.py` — Hacker News (free Algolia API): newest "Who is hiring" (job posts), "Seeking freelancer" (only
+    SEEKING FREELANCER posts) and "Ask HN" of the last 30 days, matched with pattern keywords.
+  - `jobs.py` — career pages in `sources.yaml job_pages`: opens matching job links (max 10 per page), reads the
+    "Posted ..." date.
+  - `agencies.py` — agency sites you collect by hand (`agency_candidates` or `--file data/agencies.txt`):
+    homepage + careers page, hiring words, developer roles. Clutch / Shopify / LinkedIn pages are refused.
+  - `pagespeed.py LEAD_ID` — Google PageSpeed (mobile). Score < 50 -> evidence website / pain / WEAK_SIGNAL.
+  - `gmaps.py "dental clinic in Houston TX"` — Playwright, headless, no login: name, category, address,
+    website, phone, rating + read-only website check (contact page, form, booking link). Limits in code:
+    3 searches + 60 businesses a day, 3-8 s waits, captcha -> stop at once (exit 3, logged, no more Maps today),
+    a place found before is never opened again. Reviewer names are never stored.
+  - `places.py` — **Google shows a "limited view" (no reviews) to browsers that are not logged in.** We never
+    log in or bypass it. So reviews come from the official **Places API (New)** (Ahmad's choice): up to 5 reviews
+    per place, lowest first, exact dates, names dropped. Limit `places_api.max_calls_per_day: 30` (2 calls per place).
+- `scripts/scout.py`: `pending`, `keep`, `reject`, `add-raw`, `expire`, `stats`. The code enforces: signal decay
+  days, daily new-lead cap, max 10 leads per idea per day, duplicates, block list. `keep` saves the post text as a
+  snapshot. Maps: each review that shows the problem (`review_keywords` in problems.yaml) -> evidence review /
+  pain / WEAK; 2+ such reviews -> the first one is STRONG.
+- `scripts/ideas.py`: `/search-idea` patterns in `config/ideas/<name>.yaml` (id `idea-<name>`). Research, ranking
+  and cards work with them. `promote NAME` copies one into problems.yaml (only when Ahmad says yes).
+- Commands `/discover` and `/search-idea "IDEA"`. Agent `scout` + skill `find-signals` rewritten.
+- Config: `review_keywords` in problems.yaml; `sources.yaml` (max_age_days, gmaps searches, pagespeed bad_score);
+  `policy.yaml` (`max_leads_per_idea_search: 10`, `places_api`). `config_check.py` checks all of it.
+- Playwright + Chromium installed (`requirements.txt`).
+- Tests: `test_scout.py`, `test_sources.py`, `test_gmaps.py` (sample pages in `tests/fixtures/sources/`, made-up
+  businesses, no live Google), more in `test_store_supabase.py`, `test_config.py`.
+
+**Setup (Ahmad, once, ~10 min): Google Places key for reviews**
+1. console.cloud.google.com -> new project -> APIs & Services -> Library -> enable **Places API (New)**.
+   Google asks for a billing account (card). Normal use here stays inside the free monthly usage.
+2. APIs & Services -> Credentials -> Create API key -> Restrict key -> only "Places API (New)".
+3. Safety: Places API (New) -> Quotas -> set requests per day to 60.
+4. Put it in `.env`: `GOOGLE_PLACES_API_KEY=...` (never share, never commit).
+Without the key Maps still works, but with no reviews (it prints a hint).
+
+**How to test**
+```
+python -m pytest -q                       # 714 passed, 2 xfailed
+python scripts/desk.py init               # "Supabase OK, 12 tables found."
+python scripts/sources/hn.py --dry-run    # live: matching HN posts, nothing saved
+python scripts/sources/gmaps.py "dental clinic in Houston TX" --max 5     # after the Places key
+python scripts/scout.py pending --source gmaps    # reviews + website check, no reviewer names
+```
+In Claude Code:
+1. Add 2-3 Maps searches to `config/sources.yaml` (`gmaps: searches:`) and career pages to `job_pages`.
+2. `/discover` -> then `/research ID` on 10 kept leads -> `/cards`. Goal: 3 of 10 become good cards.
+3. `/search-idea "dental clinics that need booking automation"` -> keywords shown, max 10 leads tagged with the idea.
+4. Run `gmaps.py` 4 times in one day -> the 4th is REFUSED (daily limit).
+
+**Known issues**
+- The Maps page layout can change; selectors may need a fix. Live test 2026-10-04: business info + website check OK,
+  reviews hidden (limited view) -> Places API.
+- Places API gives max 5 reviews per place, chosen by Google (not always the worst ones).
+- `role_reposted` is not detected automatically (the Scout can only use it by reading the text).
+- Job posts without a date stay "unknown date"; the researcher lowers their grade (Stage 3 rule).
+- The live test saved 2 real clinic websites + example.com as snapshots in `data/snapshots/` (local only,
+  not in Supabase). Kept (we never delete in `data/`).
+- The Scout agent runs on Haiku (cheap). If its choices are weak, it can move to Sonnet.
+- Stage 5 known issues (guard gaps for `send_draft` and Apollo) are still open.
+
+**Next:** Ahmad sets up the Places key, runs the checks above, then `git commit -m "stage 7"`.
+Then Stage 7b or 8 when Ahmad asks.

@@ -128,6 +128,56 @@ def check_problems(problems: dict, offer_ids: set[str], r: Report) -> None:
         for j, s in enumerate(p.get("signals") or []):
             if not isinstance(s, dict) or is_empty(s.get("type")) or not is_positive_int(s.get("decay_days")):
                 r.error("problems", f"{where}.signals[{j}] needs 'type' and 'decay_days' > 0")
+        rk = p.get("review_keywords")
+        if rk is not None and not (isinstance(rk, list) and all(isinstance(k, str) and k.strip() for k in rk)):
+            r.error("problems", f"{where}.review_keywords must be a list of words")
+
+
+def check_ideas(config_dir: Path, offer_ids: set[str], r: Report) -> None:
+    """Stage 7: temporary /search-idea patterns in config/ideas/*.yaml (same rules as problems.yaml)."""
+    folder = config_dir / "ideas"
+    for path in sorted(folder.glob("*.yaml")) if folder.is_dir() else []:
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        except yaml.YAMLError as exc:
+            r.error("ideas", f"{path.name} is broken YAML: {exc}")
+            continue
+        sub = Report()
+        check_problems({"patterns": [data]}, offer_ids, sub)
+        for msg in sub.errors:
+            r.error("ideas", f"{path.name}: {msg.split(': ', 1)[-1]}")
+        if data.get("id") != f"idea-{path.stem}":
+            r.error("ideas", f"{path.name}: id must be 'idea-{path.stem}'")
+
+
+def check_sources(sources: dict, policy: dict, r: Report) -> None:
+    """Stage 7: where the Scout looks, and the Google Maps safety limits."""
+    if sources.get("max_age_days") is not None and not is_positive_int(sources.get("max_age_days")):
+        r.error("sources", "'max_age_days' must be a whole number above 0")
+    for key in ("job_pages", "agency_candidates"):
+        for url in sources.get(key) or []:
+            if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+                r.error("sources", f"{key}: '{url}' must start with http:// or https://")
+            elif "linkedin.com" in url.lower():
+                r.error("sources", f"{key}: LinkedIn pages are never opened automatically ('{url}')")
+    calls = (policy.get("places_api") or {}).get("max_calls_per_day")
+    if calls is not None and not is_positive_int(calls):
+        r.error("policy", "places_api.max_calls_per_day must be a whole number above 0")
+    gmaps = sources.get("gmaps") or {}
+    if gmaps.get("searches") is not None and not isinstance(gmaps.get("searches"), list):
+        r.error("sources", "gmaps.searches must be a list")
+    if not gmaps.get("enabled"):
+        return
+    limits = policy.get("gmaps_playwright") or {}
+    for key in ("max_searches_per_day", "max_businesses_per_day", "cache_days"):
+        if not is_positive_int(limits.get(key)):
+            r.error("policy", f"gmaps_playwright.{key} must be a whole number above 0")
+    wait = limits.get("wait_seconds")
+    if not (isinstance(wait, list) and len(wait) == 2 and all(isinstance(w, (int, float)) for w in wait)
+            and 1 <= wait[0] <= wait[1]):
+        r.error("policy", "gmaps_playwright.wait_seconds must be [min, max] seconds, min at least 1")
+    if limits.get("stop_on_captcha") is not True:
+        r.error("policy", "gmaps_playwright.stop_on_captcha must be true (never get around a captcha)")
 
 
 def check_policy(policy: dict, r: Report) -> None:
@@ -174,8 +224,11 @@ def run_checks(config_dir: Path = ROOT / "config") -> Report:
     offer_ids = check_offer(configs["offer"], report) if "offer" in configs else set()
     if "problems" in configs:
         check_problems(configs["problems"], offer_ids, report)
+    check_ideas(config_dir, offer_ids, report)
     if "policy" in configs:
         check_policy(configs["policy"], report)
+    if "sources" in configs:
+        check_sources(configs["sources"], configs.get("policy") or {}, report)
     if "cadence" in configs:
         check_cadence(configs["cadence"], report)
     return report

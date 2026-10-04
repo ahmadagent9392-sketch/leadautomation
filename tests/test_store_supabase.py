@@ -312,3 +312,43 @@ def test_update_person_list_messages_events_since():
     assert store.events_since("status_changed", "2026-10-01T00:00:00+00:00") == [{"id": 2}]
     params = list(fake.requests[2].url.params.multi_items())
     assert ("type", "eq.status_changed") in params and ("ts", "gte.2026-10-01T00:00:00+00:00") in params
+
+
+# ---------- Stage 7: raw_items ----------
+def test_add_raw_item_ignores_duplicate_url():
+    store, fake = make({"POST /rest/v1/raw_items": (201, [{"id": 4}])})
+    row = {"source": "hn", "url": "https://news.ycombinator.com/item?id=1", "text": "t", "matched": {"keywords": ["x"]}}
+    assert store.add_raw_item(row) == 4
+    req = fake.requests[0]
+    assert ("on_conflict", "url") in list(req.url.params.multi_items())
+    assert "ignore-duplicates" in req.headers["prefer"]
+    assert json.loads(req.content)["matched"] == {"keywords": ["x"]}
+    store, _ = make({"POST /rest/v1/raw_items": (201, [])})          # same URL: nothing inserted
+    assert store.add_raw_item(row) is None
+
+
+def test_raw_item_reads_and_update():
+    store, fake = make({"GET /rest/v1/raw_items": (200, [{"id": 4, "status": "new"}]),
+                        "PATCH /rest/v1/raw_items": (204, None)})
+    assert store.get_raw_item(4)["id"] == 4
+    assert store.find_raw_by_url("https://x.example")["id"] == 4
+    assert ("url", "eq.https://x.example") in list(fake.requests[1].url.params.multi_items())
+    store.list_raw_items(status="new", source="gmaps", idea="dental")
+    params = list(fake.requests[2].url.params.multi_items())
+    assert ("status", "eq.new") in params and ("source", "eq.gmaps") in params and ("idea", "eq.dental") in params
+    store.update_raw_item(4, {"status": "kept", "lead_id": 9})
+    assert json.loads(fake.requests[3].content) == {"status": "kept", "lead_id": 9}
+    assert ("id", "eq.4") in list(fake.requests[3].url.params.multi_items())
+
+
+def test_check_finds_missing_stage7_parts():
+    fake = FakeSupabase()
+
+    def handler(request):
+        if request.url.path == "/rest/v1/raw_items":
+            return httpx.Response(404, json={"code": "PGRST205", "message": "not found"})
+        if request.url.path == "/rest/v1/opportunities" and request.url.params.get("select") == "idea":
+            return httpx.Response(400, json={"code": "42703", "message": "column does not exist"})
+        return fake(request)
+    store = SupabaseStore(URL, KEY, transport=httpx.MockTransport(handler))
+    assert store.check() == ["raw_items", "opportunities.idea"]

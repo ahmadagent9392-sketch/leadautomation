@@ -13,7 +13,7 @@ from db import TABLES, ConfigError, DeskError, DuplicateLead, StatusConflict
 
 # columns added after Stage 2: init reports them as missing until supabase/schema.sql is run again
 NEW_COLUMNS = (("evidence", "topic"), ("opportunities", "rank_info"), ("replies", "gmail_message_id"),
-               ("replies", "handled_at"))
+               ("replies", "handled_at"), ("opportunities", "idea"))
 
 LEAD_SELECT = "*,companies(name,domain)"
 
@@ -268,6 +268,32 @@ class SupabaseStore:
         if status:
             params.append(("status", f"eq.{status}"))
         return self._get("follow_ups", params)
+
+    # ---------- found posts and places (Stage 7) ----------
+    def add_raw_item(self, row: dict) -> int | None:
+        rows = self._ok(self._send(
+            "POST", "/raw_items", params=[("on_conflict", "url")],
+            prefer="resolution=ignore-duplicates,return=representation", json=row))
+        return int(rows[0]["id"]) if rows else None
+
+    def get_raw_item(self, raw_id: int) -> dict | None:
+        rows = self._get("raw_items", [("select", "*"), ("id", f"eq.{raw_id}")])
+        return rows[0] if rows else None
+
+    def find_raw_by_url(self, url: str) -> dict | None:
+        rows = self._get("raw_items", [("select", "*"), ("url", f"eq.{url}")])
+        return rows[0] if rows else None
+
+    def list_raw_items(self, status: str | None = None, source: str | None = None,
+                       idea: str | None = None) -> list[dict]:
+        params = [("select", "*"), ("order", "id")]
+        for col, val in (("status", status), ("source", source), ("idea", idea)):
+            if val:
+                params.append((col, f"eq.{val}"))
+        return self._get("raw_items", params)
+
+    def update_raw_item(self, raw_id: int, fields: dict) -> None:
+        self._update("raw_items", "id", raw_id, fields)
 
 
 def _now() -> str:

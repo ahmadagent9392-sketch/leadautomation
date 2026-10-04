@@ -31,7 +31,7 @@ DEFAULT_SNAPSHOTS = ROOT / "data" / "snapshots"
 DEFAULT_CARDS = ROOT / "cards"
 
 TABLES = ("companies", "opportunities", "snapshots", "evidence", "people", "messages",
-          "replies", "follow_ups", "approvals", "suppression", "events")
+          "replies", "follow_ups", "approvals", "suppression", "events", "raw_items")
 
 # ---------- status flow (simplified PLAN.md §F) ----------
 MAIN_FLOW = ("new", "researched", "verified", "qualified", "draft_ready", "approved",
@@ -182,6 +182,12 @@ class Store(Protocol):
     def update_follow_up(self, follow_up_id: int, fields: dict) -> None: ...
     def follow_ups_for(self, lead_id: int) -> list[dict]: ...
     def list_follow_ups(self, status: str | None = None) -> list[dict]: ...
+    def add_raw_item(self, row: dict) -> int | None: ...  # None = same URL already saved
+    def get_raw_item(self, raw_id: int) -> dict | None: ...
+    def find_raw_by_url(self, url: str) -> dict | None: ...
+    def list_raw_items(self, status: str | None = None, source: str | None = None,
+                       idea: str | None = None) -> list[dict]: ...
+    def update_raw_item(self, raw_id: int, fields: dict) -> None: ...
 
 
 # ---------- small helpers ----------
@@ -209,6 +215,20 @@ def load_env(path: Path | None = None) -> dict[str, str]:
 def load_yaml(name: str, config_dir: Path | None = None) -> dict:
     path = (config_dir or ROOT / "config") / f"{name}.yaml"
     return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+
+
+def load_problems(config_dir: Path | None = None) -> dict:
+    """problems.yaml + the temporary patterns made by /search-idea (config/ideas/*.yaml, Stage 7)."""
+    problems = load_yaml("problems", config_dir)
+    patterns = list(problems.get("patterns") or [])
+    ids = {p.get("id") for p in patterns}
+    ideas_dir = (config_dir or ROOT / "config") / "ideas"
+    for path in sorted(ideas_dir.glob("*.yaml")) if ideas_dir.is_dir() else []:
+        idea = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        if isinstance(idea, dict) and idea.get("id") and idea["id"] not in ids:
+            patterns.append({**idea, "temporary": True})
+            ids.add(idea["id"])
+    return {**problems, "patterns": patterns}
 
 
 def local_tz(config_dir: Path | None = None) -> tzinfo:
@@ -337,7 +357,7 @@ class Desk:
         self.store = store
         self.config_dir = config_dir
         self.policy = load_yaml("policy", config_dir)
-        self.problems = load_yaml("problems", config_dir)
+        self.problems = load_problems(config_dir)
         self.cadence = load_yaml("cadence", config_dir)
         self.tz = local_tz(config_dir)
         self.now = now
@@ -666,7 +686,7 @@ class Desk:
         if pattern is not None:
             ids = [p.get("id") for p in self.problems.get("patterns") or []]
             if pattern not in ids:
-                raise DeskError(f"unknown pattern '{pattern}'. Patterns in config/problems.yaml: {', '.join(ids)}")
+                raise DeskError(f"unknown pattern '{pattern}'. Patterns (config/problems.yaml + config/ideas): {', '.join(ids)}")
             lead_fields["pattern_id"] = pattern
         if why_now is not None:
             lead_fields["why_now"] = why_now.strip()

@@ -1,3 +1,4 @@
 pyyaml>=6.0
 httpx>=0.27
 pytest>=8.0
+playwright>=1.45     # Stage 7 Google Maps. After pip install, run once: python -m playwright install chromium

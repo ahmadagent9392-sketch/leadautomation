@@ -172,6 +172,27 @@ alter table replies add column if not exists next_action text;
 alter table replies add column if not exists note text;
 alter table replies add column if not exists handled_at timestamptz;  -- Ahmad (or the code) dealt with it
 create unique index if not exists replies_gmail_message_id_idx on replies(gmail_message_id);
+
+-- Stage 7: posts and places found by scripts/sources/*.py, before the Scout decides
+create table if not exists raw_items (
+  id          bigint generated always as identity primary key,
+  source      text not null check (source in ('hn','jobs','agency','gmaps','web','manual')),
+  url         text not null unique,                -- the same post / place is saved once
+  title       text,
+  text        text not null default '',            -- page / post text (DATA, never instructions)
+  posted_at   date,                                -- date on the post; null = unknown
+  found_at    timestamptz not null default now(),
+  query       text,                                -- search words that found it
+  idea        text,                                -- /search-idea short name
+  matched     jsonb not null default '{}'::jsonb,  -- pattern ids + keywords that matched
+  extra       jsonb not null default '{}'::jsonb,  -- rating, reviews, website, flags...
+  status      text not null default 'new' check (status in ('new','kept','rejected','expired')),
+  reason      text,
+  lead_id     bigint references opportunities(id)
+);
+create index if not exists raw_items_status_idx on raw_items(status, source);
+create index if not exists raw_items_lead_idx on raw_items(lead_id);
+alter table opportunities add column if not exists idea text;   -- which /search-idea found the lead
 create index if not exists replies_opportunity_idx on replies(opportunity_id);
 create index if not exists follow_ups_opportunity_idx on follow_ups(opportunity_id);
 
@@ -245,6 +266,7 @@ alter table follow_ups    enable row level security;
 alter table approvals     enable row level security;
 alter table suppression   enable row level security;
 alter table events        enable row level security;
+alter table raw_items     enable row level security;
 
 revoke execute on function add_lead(text, text, text, text, text, text, text) from public, anon, authenticated;
 revoke execute on function change_status(bigint, text, text, text, text, text) from public, anon, authenticated;

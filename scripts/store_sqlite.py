@@ -105,6 +105,16 @@ CREATE TABLE IF NOT EXISTS events (
   opportunity_id INTEGER REFERENCES opportunities(id),
   type TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}'
 );
+CREATE TABLE IF NOT EXISTS raw_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source TEXT NOT NULL CHECK (source IN ('hn','jobs','agency','gmaps','web','manual')),
+  url TEXT NOT NULL UNIQUE, title TEXT, text TEXT NOT NULL DEFAULT '', posted_at TEXT,
+  found_at TEXT NOT NULL, query TEXT, idea TEXT,
+  matched TEXT NOT NULL DEFAULT '{}', extra TEXT NOT NULL DEFAULT '{}',
+  status TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new','kept','rejected','expired')),
+  reason TEXT, lead_id INTEGER REFERENCES opportunities(id)
+);
+CREATE INDEX IF NOT EXISTS raw_items_status_idx ON raw_items(status, source);
 CREATE INDEX IF NOT EXISTS opportunities_status_idx ON opportunities(status);
 CREATE INDEX IF NOT EXISTS events_opportunity_idx ON events(opportunity_id);
 CREATE INDEX IF NOT EXISTS events_type_ts_idx ON events(type, ts);
@@ -128,7 +138,8 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-JSON_COLUMNS = ("depends_on", "unknowns", "payload", "rank_info", "evidence_ids", "critic", "objections")
+JSON_COLUMNS = ("depends_on", "unknowns", "payload", "rank_info", "evidence_ids", "critic", "objections",
+                "matched", "extra")
 
 
 def _decode(row: dict | None) -> dict | None:
@@ -158,7 +169,7 @@ class SqliteStore:
         self.conn.execute("PRAGMA journal_mode = WAL")
         self.conn.executescript(SCHEMA)
         self._upgrade()
-        self.conn.execute("PRAGMA user_version = 6")
+        self.conn.execute("PRAGMA user_version = 7")
 
     def _upgrade(self) -> None:
         """Adds columns that newer stages need to an older database file. Never deletes data."""
@@ -178,6 +189,10 @@ class SqliteStore:
                     self.conn.execute(f"ALTER TABLE replies ADD COLUMN {col} TEXT")
             self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS replies_gmail_message_id_idx "
                               "ON replies(gmail_message_id)")
+        cols = {r["name"] for r in self._all("PRAGMA table_info(opportunities)")}
+        if "idea" not in cols:   # Stage 7
+            with self.conn:
+                self.conn.execute("ALTER TABLE opportunities ADD COLUMN idea TEXT")
 
     def close(self) -> None:
         self.conn.close()
@@ -389,3 +404,31 @@ class SqliteStore:
         if status:
             return self._all("SELECT * FROM follow_ups WHERE status = ? ORDER BY due_on, id", (status,))
         return self._all("SELECT * FROM follow_ups ORDER BY due_on, id")
+
+    # ---------- found posts and places (Stage 7) ----------
+    def add_raw_item(self, row: dict) -> int | None:
+        row = _encode({**row, "found_at": row.get("found_at") or _now()})
+        cols = ", ".join(row)
+        marks = ", ".join("?" for _ in row)
+        with self.conn:
+            cur = self.conn.execute(f"INSERT OR IGNORE INTO raw_items({cols}) VALUES ({marks})", tuple(row.values()))
+        return int(cur.lastrowid) if cur.rowcount == 1 else None
+
+    def get_raw_item(self, raw_id: int) -> dict | None:
+        return _decode(self._one("SELECT * FROM raw_items WHERE id = ?", (raw_id,)))
+
+    def find_raw_by_url(self, url: str) -> dict | None:
+        return _decode(self._one("SELECT * FROM raw_items WHERE url = ?", (url,)))
+
+    def list_raw_items(self, status: str | None = None, source: str | None = None,
+                       idea: str | None = None) -> list[dict]:
+        where, args = [], []
+        for col, val in (("status", status), ("source", source), ("idea", idea)):
+            if val:
+                where.append(f"{col} = ?")
+                args.append(val)
+        sql = "SELECT * FROM raw_items" + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY id"
+        return [_decode(r) for r in self._all(sql, tuple(args))]
+
+    def update_raw_item(self, raw_id: int, fields: dict) -> None:
+        self._update("raw_items", raw_id, fields)

@@ -126,3 +126,41 @@ def test_fixed_price_warns_when_zero(cfg):
     edit(cfg, "offer", lambda d: d["offers"][0].update(pricing="fixed", price_usd=0))
     report = config_check.run_checks(cfg)
     assert any("price_usd" in w for w in report.warnings)
+
+
+# ---------- Stage 7: sources, Google Maps limits, idea files ----------
+def test_gmaps_must_stop_on_captcha(cfg):
+    edit(cfg, "policy", lambda d: d["gmaps_playwright"].update(stop_on_captcha=False))
+    assert any("stop_on_captcha" in e for e in config_check.run_checks(cfg).errors)
+
+
+def test_gmaps_limits_must_be_positive(cfg):
+    edit(cfg, "policy", lambda d: d["gmaps_playwright"].update(max_searches_per_day=0, wait_seconds=[0, 8]))
+    errors = config_check.run_checks(cfg).errors
+    assert any("max_searches_per_day" in e for e in errors)
+    assert any("wait_seconds" in e for e in errors)
+
+
+def test_sources_refuse_linkedin_and_bad_urls(cfg):
+    edit(cfg, "sources", lambda d: d.update(job_pages=["https://www.linkedin.com/jobs/1", "example.com/jobs"]))
+    errors = config_check.run_checks(cfg).errors
+    assert any("LinkedIn" in e for e in errors)
+    assert any("must start with http" in e for e in errors)
+
+
+def test_review_keywords_must_be_a_list(cfg):
+    edit(cfg, "problems", lambda d: d["patterns"][0].update(review_keywords="never called back"))
+    assert any("review_keywords" in e for e in config_check.run_checks(cfg).errors)
+
+
+def test_idea_files_are_checked(cfg):
+    (cfg / "ideas").mkdir(exist_ok=True)
+    (cfg / "ideas" / "dental.yaml").write_text("id: idea-other\nkeywords: []\nsignals: []\n", encoding="utf-8")
+    errors = [e for e in config_check.run_checks(cfg).errors if "ideas" in e]
+    assert any("keywords is empty" in e for e in errors)
+    assert any("id must be 'idea-dental'" in e for e in errors)
+
+
+def test_places_api_limit_must_be_positive(cfg):
+    edit(cfg, "policy", lambda d: d.update(places_api={"max_calls_per_day": 0}))
+    assert any("places_api.max_calls_per_day" in e for e in config_check.run_checks(cfg).errors)

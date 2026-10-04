@@ -5,6 +5,7 @@ caps:
   max_drafts_per_day: 25
   max_first_emails_per_day: 20      # start at 5, raise slowly
   max_touches_per_lead: 5
+  max_leads_per_idea_search: 10     # /search-idea: max new leads per idea per day
 channels_allowed: [email, linkedin_message, upwork_proposal, agency_pitch, referral_ask]
 sending: "human_only"               # never change
 excluded:
@@ -30,3 +31,5 @@ gmaps_playwright:
   wait_seconds: [3, 8]
   stop_on_captcha: true
   cache_days: 30
+places_api:                         # official Google Places API, only for reviews (Maps hides them without login)
+  max_calls_per_day: 30             # 2 calls per place; ~900 a month stays inside Google's free monthly usage

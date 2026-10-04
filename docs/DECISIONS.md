@@ -103,3 +103,22 @@ Record every change from docs/PLAN.md here: date, what changed, why.
   `max_drafts_per_day` and the 5-touch limit.
 - 2026-10-04 (Stage 6): `/sync` and `log-reply` save reply text in `data/replies/` (git-ignored).
 
+- 2026-10-04 (Stage 7, Ahmad's choice): found posts / places are saved in a new Supabase table `raw_items` before the
+  Scout decides (not local files), so the dashboard (Stage 8) can count them. New column `opportunities.idea`.
+  Applied with the Supabase MCP (migration `stage7_raw_items`).
+- 2026-10-04 (Stage 7, Ahmad's choice): `/search-idea` patterns live in `config/ideas/<name>.yaml` (id `idea-<name>`),
+  read together with problems.yaml by `db.load_problems`. `ideas.py promote` copies one into problems.yaml only
+  when Ahmad says yes. `/discover` uses only the real patterns.
+- 2026-10-04 (Stage 7, Ahmad's choice): Playwright installed now (new package, approved) for Google Maps.
+- 2026-10-04 (Stage 7): live test showed Google Maps gives a "limited view" with NO reviews to a browser that is not
+  logged in. Not bypassed (no login, no tricks). **Ahmad's choice: Playwright for business info + website check,
+  the official Google Places API (New, free tier) only for reviews** (`GOOGLE_PLACES_API_KEY`, max 30 calls a day
+  in policy.yaml). Max 5 reviews per place; reviewer names dropped.
+- 2026-10-04 (Stage 7): the Scout's rules are code (`scout.py keep`): signal decay days, daily caps, max 10 leads per
+  idea per day (`max_leads_per_idea_search`), duplicates, block list. The agent only judges keep / reject.
+- 2026-10-04 (Stage 7): Maps reviews become evidence at once (`keep`): each problem review WEAK, 2+ -> the first STRONG
+  (roadmap rule). The checker can still lower them. Review dates from Playwright are approximate ("2 months ago");
+  from the Places API they are exact.
+- 2026-10-04 (Stage 7): agency sites from Clutch / Shopify Partners are added by hand (their own website URL);
+  directory pages are refused by `agencies.py`.
+- 2026-10-04 (Stage 7): `snapshot.fetch` split into `fetch_raw` + `fetch` (same behaviour) so sources can read links.

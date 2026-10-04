@@ -1,11 +1,18 @@
-# Where to look. Add URLs as you find good ones.
+# Where to look. Add URLs as you find good ones. Used by /discover (scripts/sources/*.py).
+# Keywords come from config/problems.yaml (and config/ideas/*.yaml for /search-idea).
+max_age_days: 45       # found posts older than this are not saved, and unused ones expire
 hn:
   enabled: true
   threads: ["Who is hiring", "Freelancer? Seeking freelancer?", "Ask HN"]
   lookback_days: 30
-job_pages: []          # career page or job post URLs to watch
+job_pages: []          # career page or job post URLs to watch (company sites, not LinkedIn)
 agency_candidates: []  # agency websites you found (Clutch, Shopify Partners) — added by hand
 pagespeed:
-  enabled: true        # needs PAGESPEED_API_KEY in .env (free)
+  enabled: true        # PAGESPEED_API_KEY in .env (free) is optional; without it Google allows only a few calls
+  bad_score: 50        # mobile performance score below this = website evidence (WEAK_SIGNAL)
+gmaps:
+  enabled: true        # Playwright; limits are in config/policy.yaml (gmaps_playwright)
+  searches: []         # like "dental clinic in Houston TX". /discover runs them (max 3 a day)
+  max_per_search: 20
 manual:
   enabled: true        # always works: desk.py add-lead --url ...

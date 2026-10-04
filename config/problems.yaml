@@ -6,6 +6,8 @@ patterns:
     offer_id: "offer-1"
     description: "Small businesses paying people to copy data between apps by hand"
     keywords: ["data entry", "copy and paste", "update spreadsheet", "virtual assistant", "manual entry", "admin assistant"]
+    review_keywords: ["took forever", "lost my order", "wrong order", "never received", "billing mistake",
+                      "double charged", "paperwork", "mixed up"]   # Google reviews that show the problem
     require_tool_names: true          # stronger if the post names the apps (Shopify, QuickBooks, HubSpot...)
     signals:
       - {type: help_request,  tier: 1, decay_days: 14}   # someone asking for help (Upwork, HN, r/forhire)
@@ -27,6 +29,9 @@ patterns:
     description: "Small businesses that miss calls, web forms or messages, or reply too slowly, and lose customers"
     keywords: ["receptionist", "appointment setter", "lead follow up", "missed calls", "answer inquiries",
                "speed to lead", "inbound leads", "call back", "front desk", "customer inquiries"]
+    review_keywords: ["never called back", "never call back", "no one answered", "nobody answered", "no answer",
+                      "voicemail", "never responded", "no response", "couldn't book", "could not book",
+                      "can't get through", "on hold", "never got back"]   # Google reviews that show the problem
     require_tool_names: false
     signals:
       - {type: help_request,  tier: 1, decay_days: 14}   # "we can't keep up with inquiries"
