@@ -190,3 +190,23 @@ def test_get_snapshot_and_evidence():
 def test_add_person_returns_id():
     store, _ = make({"POST /rest/v1/people": (201, [{"id": 3}])})
     assert store.add_person({"company_id": 1, "title": "Owner"}) == 3
+
+
+# ---------- Stage 4 ----------
+def test_check_finds_missing_rank_info_column():
+    fake = FakeSupabase()
+
+    def handler(request):
+        if request.url.path == "/rest/v1/opportunities" and request.url.params.get("select") == "rank_info":
+            return httpx.Response(400, json={"code": "42703", "message": "column does not exist"})
+        return fake(request)
+    store = SupabaseStore(URL, KEY, transport=httpx.MockTransport(handler))
+    assert store.check() == ["opportunities.rank_info"]
+
+
+def test_update_lead_sends_rank_info_as_json():
+    store, fake = make({"PATCH /rest/v1/opportunities": (204, None)})
+    store.update_lead(4, {"fit": 3, "value_band": 2, "priority": 24,
+                          "rank_info": {"why": "x", "fails": [], "factors": {"fit": {"value": 3}}}})
+    body = json.loads(fake.requests[0].content)
+    assert body["priority"] == 24 and body["rank_info"]["factors"]["fit"]["value"] == 3

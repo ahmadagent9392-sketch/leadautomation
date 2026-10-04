@@ -7,8 +7,8 @@ Claude Code updates this file at the end of every stage.
 | 0 | Get ready (Ahmad) | not started | |
 | 1 | Foundation, offer, safety check | done | 2026-10-04 |
 | 2 | Database + CLI | done (Supabase setup by Ahmad) | 2026-10-04 |
-| 3 | Researcher + Checker | built, waiting for Ahmad's checks | 2026-10-04 |
-| 4 | Ranking + opportunity cards | not started | |
+| 3 | Researcher + Checker | built + committed; real-lead checks still to do (database is empty) | 2026-10-04 |
+| 4 | Ranking + opportunity cards | built, waiting for Ahmad's checks | 2026-10-04 |
 | 5 | Writer + Critic + Gmail drafts | not started | |
 | 6 | Follow-ups + reply reader | not started | |
 | 7 | Scout: automatic finding | not started | |
@@ -135,3 +135,43 @@ In Claude Code: `/research 1`. Then `python scripts/desk.py show 1`.
 - Evidence + its event are two saves (not one transaction). Fine for one user.
 
 **Next:** Ahmad runs the checks above, then `git commit -m "stage 3"`. Then Stage 4 when Ahmad asks.
+
+### Stage 4 — Ranking + opportunity cards (2026-10-04)
+**Built**
+- `scripts/rank.py`: hard gates + priority. Pass → `qualified`, fail → `rejected` + reasons.
+  - Gates: checked problem proof that is **fresh today** · fit ≥ 2 · value ≥ `min_value_band` (2) · owner role known ·
+    offer proof (only a **warning** while `offer.yaml` is `not_decided`) · not blocked (domain + contact email) ·
+    no disqualifier · no personal email (gmail...) on the `email` channel.
+  - No fit/value score yet → stays `verified` ("waiting"). Qualified leads are checked again every run:
+    old proof → `rejected`.
+  - Priority = evidence (3 CONFIRMED / 2 STRONG / 1 two WEAK) × fit × urgency (2 strong why-now proof /
+    1 weak or text only / 0 none) × value. Ties: newest proof first. Each factor + reason + one "why" line saved.
+  - `--dry-run`, `--id N`, `--need-score`.
+- `desk.py set-score ID --fit --value --fit-why --value-why [--disqualifier]`: the judgment part (Claude in /cards).
+  `show` prints fit, value, priority, why, warnings. `list` has a PRIORITY column.
+- `scripts/cards.py`: `cards/<id>.md` + `cards/index.html` (best first). Page text is escaped; only http/https
+  links. LinkedIn profiles show "(look up by hand)". `cards/` is git-ignored.
+- `/cards` command (`.claude/commands/cards.md`) with the fit/value rubric.
+- New column `opportunities.rank_info` (jsonb). Applied to Supabase (migration `stage4_rank_info`); `schema.sql` updated.
+- Tests: `test_rank.py`, `test_cards.py`, more in `test_store_supabase.py`.
+
+**How to test**
+```
+python -m pytest -q                  # 462 passed, 1 xfailed
+python scripts/desk.py init          # "Supabase OK, 11 tables found."
+```
+The database is empty now. So first make some verified leads (Stage 3):
+1. `python scripts/desk.py add-lead --url https://REAL-LINK --note "why" --channel email` (about 10 real leads).
+2. In Claude Code: `/research ID` for each.
+3. In Claude Code: `/cards`.
+4. Open `cards/index.html` in your browser. For each card ask: "Would I really contact them?"
+   Goal: 6 of 10 say yes.
+5. Wrong score? `python scripts/desk.py set-score ID --fit 2 --value 3 --fit-why "..." --value-why "..."`,
+   then `python scripts/rank.py` and `python scripts/cards.py`.
+
+**Known issues**
+- Rejected is final (closed). A lead rejected by mistake must be added again with new proof.
+- Old card `.md` files are not deleted; `index.html` shows only leads that are qualified now.
+- Fit and value are Claude's judgment. The rubric is in `/cards`; you can change any score by hand.
+
+**Next:** Ahmad does the checks above, then `git commit -m "stage 4"`. Then Stage 5 when Ahmad asks.

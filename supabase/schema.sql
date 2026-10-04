@@ -34,6 +34,7 @@ create table if not exists opportunities (
   owner_person_id bigint,
   why_now         text,
   unknowns        jsonb not null default '[]'::jsonb,
+  rank_info       jsonb not null default '{}'::jsonb,   -- Stage 4: score reasons, gates, why line
   closed_reason   text,
   created_at      timestamptz not null default now(),
   updated_at      timestamptz not null default now()
@@ -159,6 +160,9 @@ do $$ begin
     check (topic in ('pain','company','why_now','owner','contact','impact'));
 exception when duplicate_object then null;
 end $$;
+
+-- Stage 4: ranking reasons (fit/value why, gate results, one-line "why")
+alter table opportunities add column if not exists rank_info jsonb not null default '{}'::jsonb;
 
 create index if not exists evidence_opportunity_idx on evidence(opportunity_id);
 create index if not exists opportunities_status_idx on opportunities(status);

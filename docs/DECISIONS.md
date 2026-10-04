@@ -47,3 +47,17 @@ Record every change from docs/PLAN.md here: date, what changed, why.
 - 2026-10-04 (Stage 3, Ahmad's choice): checker stays on Opus.
 - 2026-10-04 (Stage 3): Quotes are copied from the snapshot .txt file, not from WebFetch (WebFetch returns a
   summary, not the exact page text). Fuzzy match allows only tiny typos (similarity ≥ 0.90).
+
+- 2026-10-04 (Stage 4, Ahmad's choice): offer proof gate = **warning** while `offer.yaml` status is not `decided`;
+  hard gate once it is `decided`. Why: the offer is set later; Stage 5 `config_check --strict` blocks outreach anyway.
+- 2026-10-04 (Stage 4, Ahmad's choice): fit and value are set by Claude in `/cards` with a written rubric
+  (`desk.py set-score`), with one-line reasons. All gates, urgency and priority are code.
+- 2026-10-04 (Stage 4, Ahmad's choice): gate fail → `rejected`; a qualified lead whose proof gets old → `rejected`;
+  value below `min_value_band` → rejected; urgency 0 is allowed (priority 0, sorts last).
+- 2026-10-04 (Stage 4): no score yet → lead stays `verified` ("waiting"), not rejected.
+- 2026-10-04 (Stage 4): extra gate from policy.yaml `excluded`: personal email (gmail, yahoo...) on the `email`
+  channel → rejected. No email at all is only a warning.
+- 2026-10-04 (Stage 4): new column `opportunities.rank_info` (jsonb) for reasons, gate results and the "why" line
+  (PLAN.md says "store each factor and its explanation"). Applied to Supabase with the MCP.
+- 2026-10-04 (Stage 4): cards are static files (`cards/*.md`, `cards/index.html`), not the FastAPI dashboard from
+  PLAN.md Phase 4. The dashboard is Stage 8.

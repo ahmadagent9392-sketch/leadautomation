@@ -86,6 +86,7 @@ EMAIL_OK = ("published", "verified")            # never save a guessed ("inferre
 RESEARCH_STATES = ("new", "researched")         # evidence can be added only in these
 CHECK_STATES = ("new", "researched", "verified")
 MAX_RESEARCH_ROUNDS = 2                         # first round + one extra round after NEED_MORE
+SCORE_STATES = ("verified", "qualified")        # fit / value can be set only in these (Stage 4)
 
 
 # ---------- errors (all have a message Ahmad can read) ----------
@@ -301,6 +302,7 @@ class Desk:
     def __init__(self, store: Store, config_dir: Path | None = None, now=now_utc,
                  snapshot_dir: Path | None = None) -> None:
         self.store = store
+        self.config_dir = config_dir
         self.policy = load_yaml("policy", config_dir)
         self.problems = load_yaml("problems", config_dir)
         self.tz = local_tz(config_dir)
@@ -660,6 +662,28 @@ class Desk:
         changed = sorted(set(lead_fields) | set(company_fields))
         self.store.add_event("research_saved", actor, lead_id, {"fields": changed})
         return changed
+
+    # ---------- ranking (Stage 4) ----------
+    def set_score(self, lead_id: int, *, fit: int, value: int, fit_why: str, value_why: str,
+                  disqualifiers: list[str] | None = None, actor: str = "role:ranker") -> dict:
+        """Saves the judgment part of ranking (fit 0-3, value 1-3, reasons, disqualifiers).
+        Everything else (gates, urgency, priority) is computed by scripts/rank.py."""
+        lead = self._lead_for_research(lead_id, SCORE_STATES)
+        if not isinstance(fit, int) or not 0 <= fit <= 3:
+            raise DeskError(f"--fit must be 0, 1, 2 or 3 (got {fit})")
+        if not isinstance(value, int) or not 1 <= value <= 3:
+            raise DeskError(f"--value must be 1, 2 or 3 (got {value})")
+        if not (fit_why or "").strip():
+            raise DeskError("--fit-why is required: one line, why this fit")
+        if not (value_why or "").strip():
+            raise DeskError("--value-why is required: one line, why this value")
+        dq = [d.strip() for d in (disqualifiers or []) if d and d.strip()]
+        info = dict(lead.get("rank_info") or {})
+        info.update({"fit_why": fit_why.strip(), "value_why": value_why.strip(), "disqualifiers": dq,
+                     "scored_by": actor, "scored_at": self.now().isoformat(timespec="seconds")})
+        self.store.update_lead(lead_id, {"fit": fit, "value_band": value, "rank_info": info})
+        self.store.add_event("scored", actor, lead_id, {"fit": fit, "value": value, "disqualifiers": dq})
+        return info
 
     def proof_gaps(self, lead: dict) -> list[str]:
         """What is still missing before a lead may be 'verified' ([] = nothing missing)."""

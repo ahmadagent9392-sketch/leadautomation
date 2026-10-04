@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS opportunities (
   value_band INTEGER CHECK (value_band BETWEEN 1 AND 3),
   urgency INTEGER CHECK (urgency BETWEEN 0 AND 2),
   priority INTEGER, owner_person_id INTEGER, why_now TEXT,
-  unknowns TEXT NOT NULL DEFAULT '[]', closed_reason TEXT,
+  unknowns TEXT NOT NULL DEFAULT '[]', rank_info TEXT NOT NULL DEFAULT '{}', closed_reason TEXT,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS snapshots (
@@ -125,7 +125,7 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-JSON_COLUMNS = ("depends_on", "unknowns", "payload")
+JSON_COLUMNS = ("depends_on", "unknowns", "payload", "rank_info")
 
 
 def _decode(row: dict | None) -> dict | None:
@@ -155,7 +155,7 @@ class SqliteStore:
         self.conn.execute("PRAGMA journal_mode = WAL")
         self.conn.executescript(SCHEMA)
         self._upgrade()
-        self.conn.execute("PRAGMA user_version = 2")
+        self.conn.execute("PRAGMA user_version = 3")
 
     def _upgrade(self) -> None:
         """Adds columns that newer stages need to an older database file. Never deletes data."""
@@ -164,6 +164,10 @@ class SqliteStore:
             with self.conn:
                 self.conn.execute("ALTER TABLE evidence ADD COLUMN topic TEXT NOT NULL DEFAULT 'company' "
                                   "CHECK (topic IN ('pain','company','why_now','owner','contact','impact'))")
+        cols = {r["name"] for r in self._all("PRAGMA table_info(opportunities)")}
+        if "rank_info" not in cols:   # Stage 4
+            with self.conn:
+                self.conn.execute("ALTER TABLE opportunities ADD COLUMN rank_info TEXT NOT NULL DEFAULT '{}'")
 
     def close(self) -> None:
         self.conn.close()

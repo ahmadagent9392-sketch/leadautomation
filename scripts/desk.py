@@ -21,6 +21,9 @@ Research (Stage 3, used by the researcher and checker agents):
                                            [--company-name N] [--domain D] [--industry I] [--size S] [--country C]
     python scripts/desk.py verify-evidence EID --grade G --note T [--claim T] [--snapshot SHA]
 
+Ranking (Stage 4, used by /cards; then run scripts/rank.py):
+    python scripts/desk.py set-score ID --fit 0-3 --value 1-3 --fit-why T --value-why T [--disqualifier T ...]
+
 Every command also takes --backend supabase|sqlite (default: DESK_BACKEND in .env, else supabase)
 and --db PATH (sqlite only, default data/desk.db).
 Exit code: 0 = OK, 1 = refused or error.
@@ -77,8 +80,9 @@ def cmd_list(desk: db.Desk, args) -> int:
         print("No leads." if not args.status else f"No leads with status '{args.status}'.")
         return 0
     _table([[l["id"], l["status"], _short(l["company_name"], 30), l["channel"],
+             "" if l.get("priority") is None else l["priority"],
              db.to_local(l["created_at"], desk.tz)[:10]] for l in leads],
-           ["ID", "STATUS", "COMPANY", "CHANNEL", "ADDED"])
+           ["ID", "STATUS", "COMPANY", "CHANNEL", "PRIORITY", "ADDED"])
     print(f"\n{len(leads)} lead(s).")
     return 0
 
@@ -96,6 +100,16 @@ def cmd_show(desk: db.Desk, args) -> int:
         print(f"  Why now : {lead['why_now']}")
     for u in lead.get("unknowns") or []:
         print(f"  Unknown : {u}")
+    info = lead.get("rank_info") or {}
+    if lead.get("fit") is not None or lead.get("value_band") is not None:
+        print(f"  Fit     : {lead.get('fit')}  ({info.get('fit_why', '')})")
+        print(f"  Value   : {lead.get('value_band')}  ({info.get('value_why', '')})")
+    for d in info.get("disqualifiers") or []:
+        print(f"  Disqual.: {d}")
+    if lead.get("priority") is not None:
+        print(f"  Priority: {lead['priority']}  = {info.get('why', '')}")
+    for w in info.get("warnings") or []:
+        print(f"  Warning : {w}")
     print(f"  Added   : {db.to_local(lead['created_at'], desk.tz)}   Updated: {db.to_local(lead['updated_at'], desk.tz)}")
     if lead.get("closed_reason"):
         print(f"  Closed  : {lead['closed_reason']}")
@@ -229,6 +243,15 @@ def cmd_verify_evidence(desk: db.Desk, args) -> int:
     return 0
 
 
+def cmd_set_score(desk: db.Desk, args) -> int:
+    desk.set_score(args.id, fit=args.fit, value=args.value, fit_why=args.fit_why, value_why=args.value_why,
+                   disqualifiers=args.disqualifier)
+    dq = f", {len(args.disqualifier)} disqualifier(s)" if args.disqualifier else ""
+    print(f"Saved score for lead #{args.id}: fit {args.fit}, value {args.value}{dq}. "
+          "Now run: python scripts/rank.py")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--backend", choices=["supabase", "sqlite"], default=None,
@@ -311,6 +334,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--note", required=True, help="why this grade")
     p.add_argument("--claim", help="corrected claim (if the old one says too much)")
     p.add_argument("--snapshot", help="new snapshot sha (if the page was saved again)")
+
+    p = sub.add_parser("set-score", parents=[common], help="ranking: save fit and value (judgment part)")
+    p.add_argument("id", type=int)
+    p.add_argument("--fit", type=int, required=True, choices=range(0, 4), help="0-3: can Ahmad solve this?")
+    p.add_argument("--value", type=int, required=True, choices=range(1, 4), help="1-3: how much is it worth?")
+    p.add_argument("--fit-why", required=True, help="one line: why this fit")
+    p.add_argument("--value-why", required=True, help="one line: why this value")
+    p.add_argument("--disqualifier", action="append", default=[],
+                   help="a disqualifier that applies (from problems.yaml / policy.yaml). Repeat for more.")
     return parser
 
 
@@ -318,7 +350,7 @@ COMMANDS = {
     "init": cmd_init, "add-lead": cmd_add_lead, "list": cmd_list, "show": cmd_show, "move": cmd_move,
     "history": cmd_history, "block": cmd_block, "blocked": cmd_blocked,
     "start-research": cmd_start_research, "add-evidence": cmd_add_evidence, "set-contact": cmd_set_contact,
-    "set-research": cmd_set_research, "verify-evidence": cmd_verify_evidence,
+    "set-research": cmd_set_research, "verify-evidence": cmd_verify_evidence, "set-score": cmd_set_score,
 }
 
 

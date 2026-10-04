@@ -12,7 +12,7 @@ import httpx
 from db import TABLES, ConfigError, DeskError, DuplicateLead, StatusConflict
 
 # columns added after Stage 2: init reports them as missing until supabase/schema.sql is run again
-NEW_COLUMNS = (("evidence", "topic"),)
+NEW_COLUMNS = (("evidence", "topic"), ("opportunities", "rank_info"))
 
 LEAD_SELECT = "*,companies(name,domain)"
 
