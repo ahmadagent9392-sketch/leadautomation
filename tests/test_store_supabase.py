@@ -210,3 +210,105 @@ def test_update_lead_sends_rank_info_as_json():
                           "rank_info": {"why": "x", "fails": [], "factors": {"fit": {"value": 3}}}})
     body = json.loads(fake.requests[0].content)
     assert body["priority"] == 24 and body["rank_info"]["factors"]["fit"]["value"] == 3
+
+
+# ---------- drafts and approvals (Stage 5) ----------
+def test_add_message_returns_id_and_sends_json():
+    store, fake = make({"POST /rest/v1/messages": (201, [{"id": 4}])})
+    mid = store.add_message({"opportunity_id": 1, "direction": "out", "body": "hi", "evidence_ids": [1, 2]})
+    assert mid == 4
+    req = fake.requests[0]
+    assert req.headers["prefer"] == "return=representation"
+    assert json.loads(req.content)["evidence_ids"] == [1, 2]
+
+
+def test_get_message_and_messages_for():
+    store, fake = make({"GET /rest/v1/messages": (200, [{"id": 4, "body": "hi"}])})
+    assert store.get_message(4)["body"] == "hi"
+    assert ("id", "eq.4") in list(fake.requests[0].url.params.multi_items())
+    assert store.messages_for(1)[0]["id"] == 4
+    params = list(fake.requests[1].url.params.multi_items())
+    assert ("opportunity_id", "eq.1") in params and ("order", "id") in params
+
+
+def test_get_message_missing():
+    store, _ = make({"GET /rest/v1/messages": (200, [])})
+    assert store.get_message(9) is None
+
+
+def test_update_message_patches_one_row():
+    store, fake = make({"PATCH /rest/v1/messages": (204, None)})
+    store.update_message(4, {"gmail_draft_id": "r-1", "critic": {"verdict": "REWRITE"}})
+    req = fake.requests[0]
+    assert req.method == "PATCH" and ("id", "eq.4") in list(req.url.params.multi_items())
+    assert json.loads(req.content) == {"gmail_draft_id": "r-1", "critic": {"verdict": "REWRITE"}}
+
+
+def test_approvals():
+    store, fake = make({"POST /rest/v1/approvals": (201, [{"id": 2}]),
+                        "GET /rest/v1/approvals": (200, [{"id": 2, "decision": "approved"}])})
+    assert store.add_approval({"object_type": "message", "object_id": 4, "body_sha256": "ab",
+                               "decision": "approved", "reason": "ok"}) == 2
+    assert store.approvals_for("message", 4)[0]["decision"] == "approved"
+    params = list(fake.requests[1].url.params.multi_items())
+    assert ("object_type", "eq.message") in params and ("object_id", "eq.4") in params
+
+
+# ---------- replies and follow-ups (Stage 6) ----------
+def test_check_finds_missing_stage6_reply_columns():
+    fake = FakeSupabase()
+
+    def handler(request):
+        if request.url.path == "/rest/v1/replies" and request.url.params.get("select") in ("gmail_message_id",
+                                                                                            "handled_at"):
+            return httpx.Response(400, json={"code": "42703", "message": "column does not exist"})
+        return fake(request)
+    store = SupabaseStore(URL, KEY, transport=httpx.MockTransport(handler))
+    assert store.check() == ["replies.gmail_message_id", "replies.handled_at"]
+
+
+def test_add_reply_and_duplicate():
+    store, fake = make({"POST /rest/v1/replies": (201, [{"id": 7}])})
+    assert store.add_reply({"opportunity_id": 1, "body": "no", "objections": [], "gmail_message_id": "g-1"}) == 7
+    assert json.loads(fake.requests[0].content)["gmail_message_id"] == "g-1"
+    store, _ = make({"POST /rest/v1/replies": (409, {"code": "23505", "message": "duplicate key"})})
+    with pytest.raises(db.DuplicateLead):
+        store.add_reply({"opportunity_id": 1, "body": "no"})
+
+
+def test_reply_reads_and_update():
+    store, fake = make({"GET /rest/v1/replies": (200, [{"id": 7, "body": "hi"}]),
+                        "PATCH /rest/v1/replies": (204, None)})
+    assert store.get_reply(7)["id"] == 7
+    assert store.find_reply_by_gmail_id("g-1")["id"] == 7
+    assert ("gmail_message_id", "eq.g-1") in list(fake.requests[1].url.params.multi_items())
+    assert store.replies_for(3)[0]["body"] == "hi"
+    assert ("opportunity_id", "eq.3") in list(fake.requests[2].url.params.multi_items())
+    assert store.list_replies()
+    store.update_reply(7, {"category": "positive", "objections": ["price"]})
+    assert json.loads(fake.requests[4].content) == {"category": "positive", "objections": ["price"]}
+
+
+def test_follow_up_rows():
+    store, fake = make({"POST /rest/v1/follow_ups": (201, [{"id": 5}]),
+                        "GET /rest/v1/follow_ups": (200, [{"id": 5, "status": "pending"}]),
+                        "PATCH /rest/v1/follow_ups": (204, None)})
+    assert store.add_follow_up({"opportunity_id": 1, "due_on": "2026-10-07", "kind": "followup",
+                                "touch_number": 2, "status": "pending"}) == 5
+    assert store.follow_ups_for(1)[0]["id"] == 5
+    store.list_follow_ups("pending")
+    params = list(fake.requests[2].url.params.multi_items())
+    assert ("status", "eq.pending") in params and ("order", "due_on,id") in params
+    store.update_follow_up(5, {"status": "done"})
+    assert ("id", "eq.5") in list(fake.requests[3].url.params.multi_items())
+
+
+def test_update_person_list_messages_events_since():
+    store, fake = make({"PATCH /rest/v1/people": (204, None), "GET /rest/v1/messages": (200, [{"id": 1}]),
+                        "GET /rest/v1/events": (200, [{"id": 2}])})
+    store.update_person(4, {"email_status": "invalid"})
+    assert json.loads(fake.requests[0].content) == {"email_status": "invalid"}
+    assert store.list_messages() == [{"id": 1}]
+    assert store.events_since("status_changed", "2026-10-01T00:00:00+00:00") == [{"id": 2}]
+    params = list(fake.requests[2].url.params.multi_items())
+    assert ("type", "eq.status_changed") in params and ("ts", "gte.2026-10-01T00:00:00+00:00") in params

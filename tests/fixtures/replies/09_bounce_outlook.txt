@@ -1,0 +1,3 @@
+Delivery has failed to these recipients or groups:
+bob@othersmile.example
+The email address you entered couldn't be found.

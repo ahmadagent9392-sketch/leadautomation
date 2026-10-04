@@ -1,0 +1,93 @@
+# Sample replies for tests (made-up people and companies).
+# rule = what scripts/replies.py quick_class must say (null = the reply reader decides)
+# category = the right category for the reply reader (golden set for checking the agent by hand)
+01_remove_me:
+  category: opt_out
+  rule: opt_out
+  sender: sara@brightsmile.example
+  subject: 'Re: your front desk'
+02_unsubscribe:
+  category: opt_out
+  rule: opt_out
+  sender: sara@brightsmile.example
+  subject: 'Re: your front desk'
+03_just_no:
+  category: opt_out
+  rule: opt_out
+  sender: sara@brightsmile.example
+  subject: 'Re: your front desk'
+04_no_thanks_signature:
+  category: opt_out
+  rule: opt_out
+  sender: sara@brightsmile.example
+  subject: 'Re: your front desk'
+05_stop_emailing:
+  category: opt_out
+  rule: opt_out
+  sender: sara@brightsmile.example
+  subject: 'Re: your front desk'
+06_dont_contact:
+  category: opt_out
+  rule: opt_out
+  sender: office@brightsmile.example
+  subject: 'Re: your front desk'
+07_take_me_off:
+  category: opt_out
+  rule: opt_out
+  sender: bob@othersmile.example
+  subject: 'Re: quick question'
+08_bounce_gmail:
+  category: bounce
+  rule: bounce
+  sender: Mail Delivery Subsystem <mailer-daemon@googlemail.com>
+  subject: Delivery Status Notification (Failure)
+09_bounce_outlook:
+  category: bounce
+  rule: bounce
+  sender: postmaster@othersmile.example
+  subject: 'Undeliverable: quick question'
+10_ooo_with_date:
+  category: out_of_office
+  rule: out_of_office
+  sender: sara@brightsmile.example
+  subject: 'Automatic reply: your front desk'
+11_ooo_no_date:
+  category: out_of_office
+  rule: out_of_office
+  sender: sara@brightsmile.example
+  subject: 'Auto-Reply: your front desk'
+12_positive:
+  category: positive
+  rule: null
+  sender: sara@brightsmile.example
+  subject: 'Re: your front desk'
+13_question_price:
+  category: question
+  rule: null
+  sender: sara@brightsmile.example
+  subject: 'Re: your front desk'
+14_not_now:
+  category: not_now
+  rule: null
+  sender: sara@brightsmile.example
+  subject: 'Re: your front desk'
+15_objection:
+  category: objection
+  rule: null
+  sender: sara@brightsmile.example
+  subject: 'Re: your front desk'
+16_referral:
+  category: referral
+  rule: null
+  sender: sara@brightsmile.example
+  subject: 'Re: your front desk'
+17_no_problem_not_opt_out:
+  category: positive
+  rule: null
+  sender: sara@brightsmile.example
+  subject: 'Re: your front desk'
+18_not_interested:
+  category: not_interested
+  rule: null
+  sender: sara@brightsmile.example
+  subject: 'Re: your front desk'

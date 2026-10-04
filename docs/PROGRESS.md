@@ -9,8 +9,8 @@ Claude Code updates this file at the end of every stage.
 | 2 | Database + CLI | done (Supabase setup by Ahmad) | 2026-10-04 |
 | 3 | Researcher + Checker | built + committed; real-lead checks still to do (database is empty) | 2026-10-04 |
 | 4 | Ranking + opportunity cards | built, waiting for Ahmad's checks | 2026-10-04 |
-| 5 | Writer + Critic + Gmail drafts | not started | |
-| 6 | Follow-ups + reply reader | not started | |
+| 5 | Writer + Critic + Gmail drafts | built, waiting for Ahmad's checks | 2026-10-04 |
+| 6 | Follow-ups + reply reader | built, waiting for Ahmad's checks | 2026-10-04 |
 | 7 | Scout: automatic finding | not started | |
 | 8 | Daily run + dashboard + schedule | not started | |
 | 9 | Use for 2–3 weeks + weekly report | not started | |
@@ -175,3 +175,130 @@ The database is empty now. So first make some verified leads (Stage 3):
 - Fit and value are Claude's judgment. The rubric is in `/cards`; you can change any score by hand.
 
 **Next:** Ahmad does the checks above, then `git commit -m "stage 4"`. Then Stage 5 when Ahmad asks.
+
+### Stage 5 — Writer + Critic + approvals + Gmail drafts (2026-10-04)
+**Built**
+- `scripts/checks.py`: code checks for every draft. ERROR = cannot go out, WARNING = look at it.
+  Word limit per channel · email subject 1-4 words · banned phrases · placeholders ({name}, [Company], TODO) ·
+  recipient email published/verified, not personal (gmail...) · block list (email + domain) · evidence ids
+  (at least one checked `pain` proof, never UNKNOWN, INFERENCE = warning) · no link in a first LinkedIn message ·
+  email footer (name, postal address, opt-out line). `python scripts/checks.py M12 [--final]`.
+- **The email footer is added by code** at export, from `policy.yaml` + `me.yaml`. The writer never types it.
+- New `desk.py` commands: `save-draft`, `save-review`, `drafts ID [--full]`, `approve`, `export-draft`,
+  `set-gmail-draft`. `show` prints the newest draft and its state.
+- **The code enforces the rules**, not only the agents:
+  - critic APPROVE only if every score ≥ 1 and total ≥ 11/14 **and** code checks are clean (else → REWRITE);
+  - max 3 drafts per lead per day (first + 2 rewrites); cap `max_drafts_per_day` (25);
+  - Ahmad's approval saves a sha256 of subject + text. Text changed later → approval invalid, lead back to
+    `draft_ready`;
+  - `export-draft` = last gate: lead approved, valid approval, final checks, not blocked,
+    `config_check --strict` passes, cap `max_first_emails_per_day` (20), not already in Gmail.
+- Status flow: qualified → (critic pass) draft_ready → (Ahmad) approved. Reject = lead stays open
+  (`--close-lead` closes it). Lead stays `approved` after the Gmail draft; `contacted` comes when Ahmad
+  really sends (Stage 6 /sync).
+- Gmail: the claude.ai Gmail connector (already connected). Python checks and prints `{to, subject, body}`;
+  `/approve` calls `create_draft`, puts label `desk` on the thread, saves the draft id. Other channels →
+  `cards/<lead id>-message.txt` for copy-paste.
+- Guard (task 6): test of every Gmail connector tool. Only `send_message` and `forward` send; guard.py blocks
+  both. `reply` is denied in settings.json. Everything else (drafts, labels, read) is allowed.
+- Agents `writer`, `critic`, skills `write-outreach`, `review-outreach` updated (examples for all 5 channels).
+  Writer can now also use Write, only for `data/drafts/`.
+- New slash commands `/draft ID` and `/approve ID`.
+- No database change: `messages` and `approvals` tables already existed.
+- Tests: `test_checks.py`, `test_drafts.py`, Gmail list in `test_guard.py`, more in `test_store_supabase.py`.
+
+**How to test**
+```
+python -m pytest -q                         # 550 passed, 2 xfailed
+python scripts/desk.py init                 # "Supabase OK, 11 tables found."
+python scripts/config_check.py --strict     # FAILS now (offer, address...) - this is expected
+```
+The database is empty. So first make qualified leads (Stages 3-4): `add-lead` → `/research ID` → `/cards`.
+Then, in Claude Code:
+1. `/draft ID` for 5 qualified leads. Read each draft: short? true (every fact in the proof)? specific?
+2. `/approve ID` → choose Approve. You will see: "config_check --strict fails". This is correct: nothing goes to
+   Gmail until your offer, postal address and proof are filled.
+3. Fill `config/me.yaml` (business_name, postal_address, skills, portfolio_links) and `config/offer.yaml`
+   (name, problem, customer, result, a proof link). Run `python scripts/config_check.py --strict` → OK.
+4. `/approve ID` again → the email appears in Gmail → Drafts with label `desk`. Read it there. Send 1 yourself.
+5. Safety test: ask Claude "send this email now" → it must be BLOCKED by guard.py.
+6. Change test: after approval, edit the text in Supabase (table `messages`, column `body`) and run
+   `python scripts/desk.py export-draft M<id>` → REFUSED "changed after Ahmad approved it".
+
+**Before volume:** use a second domain for cold email + SPF/DKIM/DMARC. Start with 5 emails a day, max 20.
+
+**Known issues**
+- guard.py allows any tool name that contains "draft". A future Gmail tool called `send_draft` would pass
+  (not exposed today; xfail test shows it). Fix = a deny rule `mcp__claude_ai_Gmail__send_draft` in
+  settings.json — only with Ahmad's OK.
+- guard.py also misses Apollo campaign tools (`apollo_emailer_campaigns_approve`, `..._add_contact_ids`) that can
+  start real sending. Do not use Apollo sequences. A deny rule can be added — only with Ahmad's OK.
+- Proof freshness is checked by `rank.py`, not again at export. A draft approved long ago with old proof can
+  still be exported. Stage 6/8 can add this.
+- If a draft is deleted by hand in Gmail, the desk still thinks it is there (Stage 6 /sync will see it).
+
+**Next:** Ahmad does the checks above, then `git commit -m "stage 5"`. Then Stage 6 when Ahmad asks.
+
+### Stage 6 — Follow-ups + reply reader (2026-10-04)
+**Built**
+- `scripts/replies.py`: fixed rules. Cuts the quoted old email first (our footer is in it), then:
+  bounce (mailer-daemon, "address not found", 550 5.1.1) > opt-out ("remove me", "unsubscribe", "stop emailing",
+  "don't contact", or just "no" / "stop") > out-of-office. These rules **win over the AI**.
+- `scripts/followups.py`: business days (Mon-Fri). Follow-up 2-5 due 3 / 7 / 14 / 24 business days after the first
+  message (min 2 business days after the last one). Max 5 touches. After the last touch + 10 business days with no
+  reply → `no_response`. `python scripts/followups.py [--dry-run]` updates all timers (safe to run many times).
+- `scripts/today.py`: what needs Ahmad today (replies, bounces, drafts to approve, emails to send, follow-ups due,
+  "not now" reminders, stale leads, leads the desk closed).
+- New `desk.py` commands: `sync-list`, `mark-sent`, `draft-missing`, `log-reply`, `classify-reply`, `replies`,
+  `reply-done`, `followups [--due]`. `show` prints sent touches, replies and the next follow-up.
+- What each reply does (code, not AI):
+  | reply | effect |
+  |---|---|
+  | opt_out | email(s) blocked **at once**, lead → `opted_out`, follow-ups cancelled |
+  | bounce | email blocked, contact marked invalid, follow-ups stop; /today: find new contact or close |
+  | out_of_office | follow-up moves after their return day (+1 business day; no date → +5) |
+  | not_now | lead → `replied`, reminder at their date (or +60 days) |
+  | not_interested | lead → `replied` → `lost` |
+  | positive / question / objection / referral / other | lead → `replied`, follow-ups stop, /today: "your move" |
+- Follow-ups reuse writer + critic + /approve. Lead stays `contacted`. Code checks: no "just following up" /
+  "bumping this"; not a copy of an earlier message; email follow-up has no subject and goes in the **same Gmail
+  thread** (`create_draft` with `replyToMessageId`). The daily first-email cap does not count follow-ups.
+- After a bounce, `set-contact` works on the `contacted` lead; the next follow-up is due at once, in a new thread.
+- New slash commands `/sync` (Gmail read only: get_thread, list_drafts, search_threads) and `/today`.
+  `/draft` and `/approve` handle follow-ups. Agent `reply-reader` + skill `read-replies` rewritten; writer, critic
+  and their skills have follow-up rules.
+- Database: `replies` got `gmail_message_id` (unique), `sender`, `subject`, `next_action`, `note`, `handled_at`.
+  Applied to Supabase (migration `stage6_replies`); `schema.sql` updated. Security check: only the expected INFO.
+- `config/cadence.yaml`: new timer settings (all checked by `config_check.py`).
+- Tests: `test_replies.py` (18 sample replies in `tests/fixtures/replies/`), `test_followups.py`, `test_sync.py`,
+  more in `test_store_supabase.py`, `test_config.py`, `test_guard.py`.
+
+**How to test**
+```
+python -m pytest -q                       # 648 passed, 2 xfailed
+python scripts/desk.py init               # "Supabase OK, 11 tables found."
+python scripts/today.py                   # "Nothing needs you today." (database is empty)
+python scripts/replies.py tests/fixtures/replies/03_just_no.txt    # rule result: opt_out
+```
+Full loop by hand (needs one approved email; see Stage 5 — the offer + postal address must be filled first):
+1. `/approve ID` → the email is in Gmail Drafts. Change the "To" to **your own second address** if you test.
+   Better: make a test lead whose published email is your second address.
+2. Press Send in Gmail. In Claude Code: `/sync` → "M.. marked as sent", lead `contacted`, follow-up date shown.
+3. From the second address reply **"please remove me"**. `/sync` → address on the block list
+   (`python scripts/desk.py blocked`), lead `opted_out`.
+4. `/today` → correct list.
+5. LinkedIn test: `python scripts/desk.py mark-sent M<id>` after you send by hand, then
+   `python scripts/desk.py log-reply ID --text "Sounds good, tell me more"` → the reply-reader sorts it
+   (ask Claude: "sort reply R<id> of lead ID").
+6. Samples: `python -m pytest -q tests/test_replies.py` → all 18 samples sorted as expected.
+
+**Known issues**
+- Holidays are not skipped (only weekends).
+- If Ahmad changes the text in the Gmail draft before sending, the desk saves the approved text, not the sent one.
+- New facts for a follow-up: evidence can be added only before contact. Follow-ups use ideas / examples / other
+  angles on the checked proof.
+- After a "not now" reminder message is sent, the lead stays `replied`; no automatic follow-ups after it.
+- Stage 5 known issues (guard gaps for `send_draft` and Apollo) are still open.
+
+**Next:** Ahmad commits Stage 5 (`git commit -m "stage 5"`) if not done, runs the checks above, then
+`git commit -m "stage 6"`. Then Stage 7 when Ahmad asks.

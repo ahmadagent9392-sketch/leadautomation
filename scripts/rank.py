@@ -26,14 +26,12 @@ from pathlib import Path
 
 import db
 import quote_check as qc
+from checks import PERSONAL_EMAIL_DOMAINS
 
 ACTOR = "code:rank"
 MIN_FIT = 2
 EVIDENCE_POINTS = {"CONFIRMED_FACT": 3, "STRONG_SIGNAL": 2}      # two WEAK from different sources = 1
 STRONG = ("CONFIRMED_FACT", "STRONG_SIGNAL")
-PERSONAL_EMAIL_DOMAINS = {"gmail.com", "googlemail.com", "yahoo.com", "ymail.com", "hotmail.com", "outlook.com",
-                          "live.com", "msn.com", "aol.com", "icloud.com", "me.com", "proton.me", "protonmail.com",
-                          "gmx.com", "mail.com", "yandex.com", "zoho.com"}
 SOURCE_WORDS = {"job_post": "job post", "help_request": "help request", "review": "review", "website": "website",
                 "news": "news", "profile": "profile", "manual": "pasted by Ahmad"}
 GRADE_WORDS = {"CONFIRMED_FACT": "CONFIRMED", "STRONG_SIGNAL": "STRONG", "WEAK_SIGNAL": "WEAK"}

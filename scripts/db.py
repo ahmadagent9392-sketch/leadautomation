@@ -19,12 +19,16 @@ from urllib.parse import urlsplit
 
 import yaml
 
+import checks as ck
+import followups as fu
 import quote_check as qc
+import replies as rp
 
 ROOT = Path(__file__).resolve().parent.parent
 ENV_FILE = ROOT / ".env"
 DEFAULT_SQLITE = ROOT / "data" / "desk.db"
 DEFAULT_SNAPSHOTS = ROOT / "data" / "snapshots"
+DEFAULT_CARDS = ROOT / "cards"
 
 TABLES = ("companies", "opportunities", "snapshots", "evidence", "people", "messages",
           "replies", "follow_ups", "approvals", "suppression", "events")
@@ -87,6 +91,16 @@ RESEARCH_STATES = ("new", "researched")         # evidence can be added only in 
 CHECK_STATES = ("new", "researched", "verified")
 MAX_RESEARCH_ROUNDS = 2                         # first round + one extra round after NEED_MORE
 SCORE_STATES = ("verified", "qualified")        # fit / value can be set only in these (Stage 4)
+DRAFT_STATES = ("qualified", "draft_ready")     # the writer can save a draft only in these (Stage 5)
+MAX_REWRITES = 2                                # per lead per day: first draft + 2 rewrites
+CRITIC_KEYS = ("specific", "true", "relevant", "short", "tone", "next_step", "compliance")
+CRITIC_VERDICTS = ("APPROVE_FOR_HUMAN", "REWRITE", "REJECT")
+MIN_CRITIC_TOTAL = 11                           # of 14; and every score >= 1
+DECISIONS = {"approve": "approved", "edit": "edited", "reject": "rejected"}
+FOLLOWUP_STATES = ("contacted", "replied")      # follow-up drafts (touch 2-5) only in these (Stage 6)
+EMAIL_RE = re.compile(r"[A-Za-z0-9._%+'-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+# reply categories the code deals with by itself; the others wait for Ahmad ("your move")
+AUTO_HANDLED = ("opt_out", "out_of_office", "not_now", "not_interested")
 
 
 # ---------- errors (all have a message Ahmad can read) ----------
@@ -149,6 +163,25 @@ class Store(Protocol):
     def add_person(self, row: dict) -> int: ...
     def update_lead(self, lead_id: int, fields: dict) -> None: ...
     def update_company(self, company_id: int, fields: dict) -> None: ...
+    def add_message(self, row: dict) -> int: ...
+    def get_message(self, message_id: int) -> dict | None: ...
+    def update_message(self, message_id: int, fields: dict) -> None: ...
+    def messages_for(self, lead_id: int) -> list[dict]: ...
+    def add_approval(self, row: dict) -> int: ...
+    def approvals_for(self, object_type: str, object_id: int) -> list[dict]: ...
+    def list_messages(self) -> list[dict]: ...
+    def events_since(self, type_: str, since_iso: str) -> list[dict]: ...
+    def update_person(self, person_id: int, fields: dict) -> None: ...
+    def add_reply(self, row: dict) -> int: ...
+    def get_reply(self, reply_id: int) -> dict | None: ...
+    def find_reply_by_gmail_id(self, gmail_message_id: str) -> dict | None: ...
+    def update_reply(self, reply_id: int, fields: dict) -> None: ...
+    def replies_for(self, lead_id: int) -> list[dict]: ...
+    def list_replies(self) -> list[dict]: ...
+    def add_follow_up(self, row: dict) -> int: ...
+    def update_follow_up(self, follow_up_id: int, fields: dict) -> None: ...
+    def follow_ups_for(self, lead_id: int) -> list[dict]: ...
+    def list_follow_ups(self, status: str | None = None) -> list[dict]: ...
 
 
 # ---------- small helpers ----------
@@ -305,6 +338,7 @@ class Desk:
         self.config_dir = config_dir
         self.policy = load_yaml("policy", config_dir)
         self.problems = load_yaml("problems", config_dir)
+        self.cadence = load_yaml("cadence", config_dir)
         self.tz = local_tz(config_dir)
         self.now = now
         self.snapshot_dir = Path(snapshot_dir) if snapshot_dir else DEFAULT_SNAPSHOTS
@@ -583,7 +617,10 @@ class Desk:
     def set_contact(self, lead_id: int, *, title: str, name: str | None = None, role_type: str | None = None,
                     email: str | None = None, email_status: str | None = None, profile_url: str | None = None,
                     evidence_id: int | None = None, actor: str = "role:researcher") -> int:
-        lead = self._lead_for_research(lead_id)
+        lead = self.get(lead_id)
+        after_bounce = lead["status"] == "contacted" and self.open_bounce(lead_id) is not None
+        if not after_bounce:
+            lead = self._lead_for_research(lead_id)
         if not title or not title.strip():
             raise DeskError("--title is required (for example: Owner, Office Manager)")
         if role_type and role_type not in ROLE_TYPES:
@@ -610,7 +647,7 @@ class Desk:
                "email_status": email_status if email else None,
                "profile_url": (profile_url or "").strip() or None, "evidence_id": evidence_id}
         pid = self.store.add_person(row)
-        if role_type == "owner" or not lead.get("owner_person_id"):
+        if role_type == "owner" or not lead.get("owner_person_id") or after_bounce:
             self.store.update_lead(lead_id, {"owner_person_id": pid})
         self.store.add_event("contact_added", actor, lead_id,
                              {"person_id": pid, "title": row["title"], "role_type": role_type,
@@ -701,6 +738,706 @@ class Desk:
             gaps.append(f"{lead['company_domain']} is on the block list")
         return gaps
 
+    # ---------- drafts, critic, approvals, export (Stage 5) ----------
+    def me(self) -> dict:
+        return load_yaml("me", self.config_dir)
+
+    def _since_today(self) -> str:
+        return start_of_today_utc(self.tz, self.now()).isoformat(timespec="seconds")
+
+    def get_message(self, message_id: int) -> dict:
+        msg = self.store.get_message(message_id)
+        if not msg or msg.get("direction") != "out":
+            raise NotFound(f"draft M{message_id} not found")
+        return msg
+
+    def latest_draft(self, lead_id: int) -> dict | None:
+        drafts = [m for m in self.store.messages_for(lead_id) if m.get("direction") == "out"]
+        return drafts[-1] if drafts else None
+
+    def _must_be_latest(self, msg: dict) -> None:
+        latest = self.latest_draft(msg["opportunity_id"])
+        if latest and latest["id"] != msg["id"]:
+            raise InvalidMove(f"M{msg['id']} is an old draft. The newest draft of lead #{msg['opportunity_id']} "
+                              f"is M{latest['id']}.")
+
+    def recipient(self, lead: dict) -> dict | None:
+        """The person the message goes to: the lead's owner contact."""
+        people = self.store.people_for(lead["company_id"])
+        for p in people:
+            if p["id"] == lead.get("owner_person_id"):
+                return p
+        return people[0] if people else None
+
+    def check_message(self, message_id: int, final: bool = False) -> tuple[dict, dict, list[ck.Problem]]:
+        msg = self.get_message(message_id)
+        lead = self.get(msg["opportunity_id"])
+        problems = ck.check_draft(
+            channel=msg.get("channel") or lead["channel"], subject=msg.get("subject"), body=msg["body"],
+            evidence_ids=list(msg.get("evidence_ids") or []), lead=lead,
+            evidence=self.store.evidence_for(lead["id"]), recipient=self.recipient(lead), policy=self.policy,
+            me=self.me(), is_blocked=self.is_blocked, touch_number=int(msg.get("touch_number") or 1), final=final,
+            previous_bodies=[m["body"] for m in self.sent_messages(lead["id"]) if m["id"] != msg["id"]])
+        return msg, lead, problems
+
+    def drafts_today(self, lead_id: int) -> int:
+        since = self._since_today()
+        return sum(1 for e in self.store.events_for(lead_id) if e["type"] == "draft_saved" and e["ts"] >= since)
+
+    def save_draft(self, lead_id: int, *, body: str, evidence_ids: list[int], subject: str | None = None,
+                   channel: str | None = None, angle: str | None = None, cta: str | None = None,
+                   actor: str = "role:writer") -> tuple[int, list[ck.Problem]]:
+        """Saves one draft (the email footer is NOT part of it: code adds it at export).
+        Returns (message id, problems found by the code checks).
+        First message: lead qualified / draft_ready. Follow-up (touch 2-5): lead contacted / replied and a
+        follow-up or nurture reminder is due today."""
+        lead = self.get(lead_id)
+        touch = self.next_touch(lead)
+        if lead.get("company_domain") and self.store.get_block(lead["company_domain"]):
+            raise Blocked(f"{lead['company_domain']} is on the block list. No draft.")
+        channel = normalize_channel(channel or lead["channel"], list(self.policy.get("channels_allowed") or []))
+        body = ck.normalize_text(body)
+        if not body:
+            raise DeskError("the draft text is empty")
+        if self.drafts_today(lead_id) >= 1 + MAX_REWRITES:
+            raise CapReached(f"lead #{lead_id} already has {1 + MAX_REWRITES} drafts today (first + {MAX_REWRITES} "
+                             "rewrites). Ahmad decides now: /approve with an edit, or try again tomorrow.")
+        cap = self._cap("max_drafts_per_day")
+        if cap and self.store.count_events("draft_saved", self._since_today()) >= cap:
+            raise CapReached(f"daily limit reached: {cap} drafts today (config/policy.yaml). Try tomorrow.")
+        row = {"opportunity_id": lead_id, "touch_number": touch, "direction": "out", "channel": channel,
+               "subject": ck.normalize_text(subject) or None, "body": body, "angle": (angle or "").strip() or None,
+               "cta_type": (cta or "").strip() or None, "evidence_ids": sorted(set(evidence_ids or []))}
+        mid = self.store.add_message(row)
+        _, _, problems = self.check_message(mid)
+        self.store.add_event("draft_saved", actor, lead_id,
+                             {"message_id": mid, "channel": channel, "touch": touch,
+                              "errors": len(ck.errors(problems))})
+        return mid, problems
+
+    def save_review(self, message_id: int, *, verdict: str, scores: dict[str, int], reasons: list[str],
+                    actor: str = "role:critic") -> tuple[str, list[str]]:
+        """Saves the critic's review. The code checks the score rule and the code checks.
+        Returns (final verdict, notes for the user)."""
+        verdict = (verdict or "").strip().upper()
+        if verdict not in CRITIC_VERDICTS:
+            raise DeskError(f"unknown verdict '{verdict}'. Use: {', '.join(CRITIC_VERDICTS)}")
+        missing = [k for k in CRITIC_KEYS if k not in scores]
+        extra = [k for k in scores if k not in CRITIC_KEYS]
+        if missing or extra:
+            raise DeskError(f"scores need exactly: {', '.join(CRITIC_KEYS)}"
+                            + (f" (missing: {', '.join(missing)})" if missing else "")
+                            + (f" (unknown: {', '.join(extra)})" if extra else ""))
+        for k, v in scores.items():
+            if not isinstance(v, int) or isinstance(v, bool) or not 0 <= v <= 2:
+                raise DeskError(f"score '{k}' must be 0, 1 or 2 (got {v})")
+        reasons = [r.strip() for r in reasons or [] if r and r.strip()]
+        if verdict != "APPROVE_FOR_HUMAN" and not reasons:
+            raise DeskError(f"{verdict} needs at least one --reason (what exactly to fix, or why)")
+        msg, lead, problems = self.check_message(message_id)
+        self._must_be_latest(msg)
+        if msg.get("sent_at"):
+            raise InvalidMove(f"M{msg['id']} was already sent.")
+        states = DRAFT_STATES if int(msg.get("touch_number") or 1) == 1 else FOLLOWUP_STATES
+        if lead["status"] not in states:
+            raise InvalidMove(f"lead #{lead['id']} is '{lead['status']}'. A review needs: {', '.join(states)}.")
+
+        total = sum(scores.values())
+        notes: list[str] = []
+        final = verdict
+        if verdict == "APPROVE_FOR_HUMAN":
+            if min(scores.values()) < 1 or total < MIN_CRITIC_TOTAL:
+                final = "REWRITE"
+                notes.append(f"scores do not allow approval (total {total}/14, lowest {min(scores.values())}; "
+                             f"need every score >= 1 and total >= {MIN_CRITIC_TOTAL}) -> REWRITE")
+            bad = ck.errors(problems)
+            if bad:
+                final = "REWRITE"
+                notes.append("code checks have errors -> REWRITE: " + "; ".join(p.text for p in bad))
+        if final == "REWRITE" and self.drafts_today(lead["id"]) >= 1 + MAX_REWRITES:
+            notes.append(f"no rewrites left today (max {MAX_REWRITES}). Ahmad decides: /approve {lead['id']} "
+                         "with an edit, or reject.")
+        review = {"verdict": final, "critic_verdict": verdict, "scores": scores, "total": total,
+                  "reasons": reasons + notes, "by": actor, "at": self.now().isoformat(timespec="seconds")}
+        self.store.update_message(msg["id"], {"critic": review})
+        self.store.add_event("draft_reviewed", actor, lead["id"],
+                             {"message_id": msg["id"], "verdict": final, "total": total})
+        if final == "APPROVE_FOR_HUMAN" and lead["status"] == "qualified":
+            self.store.change_status(lead["id"], "qualified", "draft_ready",
+                                     f"critic approved M{msg['id']} ({total}/14)", actor, None)
+        return final, notes
+
+    def valid_approval(self, msg: dict) -> dict | None:
+        """Ahmad's last approval if it still matches the text, else None."""
+        rows = self.store.approvals_for("message", msg["id"])
+        if not rows or rows[-1]["decision"] == "rejected":
+            return None
+        last = rows[-1]
+        return last if last["body_sha256"] == ck.body_sha256(msg.get("subject"), msg["body"]) else None
+
+    def draft_state(self, msg: dict) -> str:
+        if msg.get("sent_at"):
+            return f"sent {to_local(msg['sent_at'], self.tz)[:10]}"
+        if msg.get("gmail_draft_id"):
+            return "in Gmail drafts"
+        rows = self.store.approvals_for("message", msg["id"])
+        if rows:
+            if rows[-1]["decision"] == "rejected":
+                return "rejected by Ahmad"
+            if self.valid_approval(msg) is None:
+                return "CHANGED after approval (approve again)"
+            exported = any(e["type"] == "draft_exported" and (e.get("payload") or {}).get("message_id") == msg["id"]
+                           for e in self.store.events_for(msg["opportunity_id"]))
+            return "approved, copy-paste file written" if exported else "approved by Ahmad"
+        critic = msg.get("critic") or {}
+        return {"APPROVE_FOR_HUMAN": "ready for Ahmad (/approve)", "REWRITE": "critic: rewrite",
+                "REJECT": "critic: reject"}.get(critic.get("verdict"), "waiting for critic")
+
+    def approve(self, message_id: int, decision: str, reason: str, *, body: str | None = None,
+                subject: str | None = None, close_lead: bool = False, actor: str = "human") -> tuple[int, str]:
+        """Ahmad's decision on a draft: approve, edit (his own text) or reject.
+        Returns (id of the approved / rejected draft, short result text)."""
+        decision = (decision or "").strip().lower()
+        if decision not in DECISIONS:
+            raise DeskError(f"unknown decision '{decision}'. Use: approve, edit, reject")
+        if not reason or not reason.strip():
+            raise DeskError("a reason is required (--reason TEXT)")
+        reason = reason.strip()
+        msg = self.get_message(message_id)
+        self._must_be_latest(msg)
+        if msg.get("sent_at"):
+            raise InvalidMove(f"M{msg['id']} was already sent. Nothing to decide.")
+        lead = self.get(msg["opportunity_id"])
+        lid = lead["id"]
+        first = int(msg.get("touch_number") or 1) == 1
+        if not first and lead["status"] not in FOLLOWUP_STATES:
+            raise InvalidMove(f"lead #{lid} is '{lead['status']}'. A follow-up needs: {', '.join(FOLLOWUP_STATES)}.")
+
+        if decision == "reject":
+            if first and lead["status"] not in ("qualified", "draft_ready", "approved"):
+                raise InvalidMove(f"lead #{lid} is '{lead['status']}'. Nothing to reject.")
+            self.store.add_approval({"object_type": "message", "object_id": msg["id"],
+                                     "body_sha256": ck.body_sha256(msg.get("subject"), msg["body"]),
+                                     "decision": "rejected", "reason": reason})
+            self.store.add_event("draft_rejected", actor, lid, {"message_id": msg["id"], "reason": reason})
+            if close_lead and first:
+                self.move(lid, "rejected", f"Ahmad rejected M{msg['id']}: {reason}", actor)
+                return msg["id"], f"M{msg['id']} rejected; lead #{lid} is closed (rejected)."
+            if lead["status"] == "approved":
+                self.store.change_status(lid, "approved", "draft_ready", f"Ahmad rejected M{msg['id']}", actor, None)
+            return msg["id"], f"M{msg['id']} rejected. Lead #{lid} stays open; /draft {lid} can write a new one."
+
+        if decision == "approve":
+            if first and lead["status"] not in ("draft_ready", "approved"):
+                raise InvalidMove(f"lead #{lid} is '{lead['status']}'. Approve needs a draft the critic passed "
+                                  "(status draft_ready). You can still use --decision edit.")
+            if (msg.get("critic") or {}).get("verdict") not in ("APPROVE_FOR_HUMAN", "EDITED_BY_AHMAD"):
+                raise InvalidMove(f"the critic did not pass M{msg['id']}. Use --decision edit with your own text, "
+                                  "or reject.")
+            target = msg
+        else:  # edit
+            if first and lead["status"] not in ("qualified", "draft_ready", "approved"):
+                raise InvalidMove(f"lead #{lid} is '{lead['status']}'. Edit needs: qualified, draft_ready, approved.")
+            new_body = ck.normalize_text(body)
+            if not new_body:
+                raise DeskError("edit needs the new text (--body-file FILE)")
+            new_subject = ck.normalize_text(subject) if subject is not None else msg.get("subject")
+            critic = {"verdict": "EDITED_BY_AHMAD", "from_message": msg["id"],
+                      "old_review": msg.get("critic"), "at": self.now().isoformat(timespec="seconds")}
+            new_id = self.store.add_message({
+                "opportunity_id": lid, "touch_number": msg.get("touch_number") or 1, "direction": "out",
+                "channel": msg.get("channel"), "subject": new_subject or None, "body": new_body,
+                "angle": msg.get("angle"), "cta_type": msg.get("cta_type"),
+                "evidence_ids": list(msg.get("evidence_ids") or []), "critic": critic})
+            target = self.get_message(new_id)
+
+        _, _, problems = self.check_message(target["id"])
+        bad = ck.errors(problems)
+        if bad:
+            raise InvalidMove(f"M{target['id']} cannot be approved, the code checks found errors: "
+                              + "; ".join(p.text for p in bad))
+        self.store.add_approval({"object_type": "message", "object_id": target["id"],
+                                 "body_sha256": ck.body_sha256(target.get("subject"), target["body"]),
+                                 "decision": DECISIONS[decision], "reason": reason})
+        self.store.add_event(f"draft_{DECISIONS[decision]}", actor, lid, {"message_id": target["id"], "reason": reason})
+        word = "approved" if decision == "approve" else f"edited, saved as M{target['id']} and approved"
+        if not first:
+            return target["id"], (f"M{msg['id']} {word} (follow-up {target.get('touch_number')}). "
+                                  f"Lead #{lid} stays {lead['status']}.")
+        status = lead["status"]
+        if status == "qualified":
+            self.store.change_status(lid, "qualified", "draft_ready", f"Ahmad edited M{msg['id']}", actor, None)
+            status = "draft_ready"
+        if status == "draft_ready":
+            self.store.change_status(lid, "draft_ready", "approved", f"Ahmad approved M{target['id']}", actor, None)
+        return target["id"], f"M{msg['id']} {word}. Lead #{lid} is approved."
+
+    def strict_config_problems(self) -> list[str]:
+        """config_check --strict: errors + warnings ([] = ready for outreach)."""
+        import config_check
+        report = config_check.run_checks(self.config_dir or ROOT / "config")
+        return report.errors + report.warnings
+
+    def export_draft(self, message_id: int, out_dir: Path | None = None) -> dict:
+        """The last gate before Gmail / copy-paste. Never sends anything.
+        email -> returns {to, subject, body} for Gmail create_draft (body includes the footer).
+        other channels -> writes cards/<lead id>-message.txt and returns its path."""
+        msg = self.get_message(message_id)
+        self._must_be_latest(msg)
+        lead = self.get(msg["opportunity_id"])
+        lid = lead["id"]
+        touch = int(msg.get("touch_number") or 1)
+        if msg.get("sent_at"):
+            raise InvalidMove(f"M{msg['id']} was already sent.")
+        if touch == 1 and lead["status"] != "approved":
+            raise InvalidMove(f"lead #{lid} is '{lead['status']}'. Export needs an approved draft (/approve {lid}).")
+        if touch > 1:
+            if lead["status"] not in FOLLOWUP_STATES:
+                raise InvalidMove(f"lead #{lid} is '{lead['status']}'. No follow-up can go out now.")
+            if self.unsorted_reply(lid) or not self.due_follow_up(lid):
+                raise InvalidMove(f"no follow-up of lead #{lid} is due today (a reply came, or it was stopped). "
+                                  "Run: python scripts/followups.py")
+        cfg = self.strict_config_problems()
+        if cfg:
+            raise InvalidMove("config_check --strict fails, so nothing goes to Gmail or a copy-paste file yet. "
+                              f"{len(cfg)} item(s) to fix, for example: " + "; ".join(cfg[:3])
+                              + ". Run: python scripts/config_check.py --strict")
+        rows = self.store.approvals_for("message", msg["id"])
+        if not rows or rows[-1]["decision"] == "rejected":
+            raise InvalidMove(f"M{msg['id']} has no approval from Ahmad (/approve {lid}).")
+        if self.valid_approval(msg) is None:
+            self.store.add_event("approval_invalid", "code:export", lid,
+                                 {"message_id": msg["id"], "reason": "text changed after approval"})
+            if touch == 1:
+                self.store.change_status(lid, "approved", "draft_ready",
+                                         f"M{msg['id']} text changed after approval", "code:export", None)
+            raise InvalidMove(f"M{msg['id']} was changed after Ahmad approved it. The approval is no longer valid; "
+                              f"lead #{lid} is back to draft_ready. Approve again (/approve {lid}).")
+        _, _, problems = self.check_message(msg["id"], final=True)
+        bad = ck.errors(problems)
+        if bad:
+            raise InvalidMove(f"M{msg['id']} fails the final checks: " + "; ".join(p.text for p in bad))
+        channel = msg.get("channel") or lead["channel"]
+
+        if channel == "email":
+            if msg.get("gmail_draft_id"):
+                raise InvalidMove(f"M{msg['id']} is already in Gmail drafts (id {msg['gmail_draft_id']}).")
+            cap = self._cap("max_first_emails_per_day")
+            if touch == 1 and cap:
+                made = [e for e in self.store.events_since("gmail_draft_created", self._since_today())
+                        if int((e.get("payload") or {}).get("touch") or 1) == 1]
+                if len(made) >= cap:
+                    raise CapReached(f"daily limit reached: {cap} first emails today (config/policy.yaml). "
+                                     "Try tomorrow.")
+            footer = ck.render_footer(self.policy, self.me())
+            to = self.recipient(lead)["email"]
+            subject, reply_to = msg.get("subject") or "", None
+            if touch > 1:
+                last = self.sent_messages(lid)[-1]
+                if last.get("gmail_message_id") and self.sent_to(last) == to:
+                    reply_to = last["gmail_message_id"]          # same Gmail thread
+                if not subject:
+                    first_subject = next((m.get("subject") for m in self.sent_messages(lid) if m.get("subject")), "")
+                    subject = first_subject if first_subject.lower().startswith("re:") else f"Re: {first_subject}"
+            return {"channel": channel, "message_id": msg["id"], "touch": touch, "to": [to], "subject": subject,
+                    "body": f"{msg['body']}\n\n{footer}", "reply_to_message_id": reply_to}
+
+        out = Path(out_dir) if out_dir else DEFAULT_CARDS
+        out.mkdir(parents=True, exist_ok=True)
+        path = out / (f"{lid}-message.txt" if touch == 1 else f"{lid}-touch{touch}-message.txt")
+        text = (f"Subject: {msg['subject']}\n\n" if msg.get("subject") else "") + msg["body"] + "\n"
+        path.write_text(text, encoding="utf-8", newline="\n")
+        self.store.add_event("draft_exported", "code:export", lid, {"message_id": msg["id"], "path": path.name})
+        return {"channel": channel, "message_id": msg["id"], "path": str(path)}
+
+    def set_gmail_draft(self, message_id: int, draft_id: str, thread_id: str | None = None,
+                        actor: str = "role:approve") -> None:
+        """Saves the Gmail draft id after Claude made the draft with the Gmail connector."""
+        draft_id = (draft_id or "").strip()
+        if not draft_id:
+            raise DeskError("--draft-id is required (the id Gmail create_draft returned)")
+        msg = self.get_message(message_id)
+        if (msg.get("channel") or "") != "email":
+            raise DeskError(f"M{msg['id']} is not an email")
+        if msg.get("gmail_draft_id"):
+            raise InvalidMove(f"M{msg['id']} already has Gmail draft {msg['gmail_draft_id']}")
+        if self.valid_approval(msg) is None:
+            raise InvalidMove(f"M{msg['id']} has no valid approval. Delete the Gmail draft by hand and /approve again.")
+        self.store.update_message(msg["id"], {"gmail_draft_id": draft_id,
+                                              "thread_id": (thread_id or "").strip() or None})
+        self.store.add_event("gmail_draft_created", actor, msg["opportunity_id"],
+                             {"message_id": msg["id"], "gmail_draft_id": draft_id,
+                              "touch": int(msg.get("touch_number") or 1)})
+
+    # ---------- sent messages, replies, follow-ups (Stage 6) ----------
+    def local_date(self, ts: str | date | None) -> date | None:
+        if not ts:
+            return None
+        if isinstance(ts, date) and not isinstance(ts, datetime):
+            return ts
+        dt = ts if isinstance(ts, datetime) else datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(self.tz).date()
+
+    def sent_messages(self, lead_id: int) -> list[dict]:
+        """Messages Ahmad really sent (oldest first)."""
+        sent = [m for m in self.store.messages_for(lead_id) if m.get("direction") == "out" and m.get("sent_at")]
+        return sorted(sent, key=lambda m: (m["sent_at"], m["id"]))
+
+    def sent_to(self, msg: dict) -> str | None:
+        """The email address a sent message went to (saved when Ahmad sent it)."""
+        for e in self.store.events_for(msg["opportunity_id"]):
+            p = e.get("payload") or {}
+            if e["type"] == "message_sent" and p.get("message_id") == msg["id"]:
+                return p.get("to")
+        return None
+
+    def pending_follow_ups(self, lead_id: int) -> list[dict]:
+        return [f for f in self.store.follow_ups_for(lead_id) if f["status"] == "pending"]
+
+    def due_follow_up(self, lead_id: int) -> dict | None:
+        """The pending follow-up / nurture reminder that is due today (or late), if any."""
+        today = self.today().isoformat()
+        due = [f for f in self.pending_follow_ups(lead_id)
+               if f["kind"] in ("followup", "nurture") and str(f["due_on"])[:10] <= today]
+        return due[0] if due else None
+
+    def unsorted_reply(self, lead_id: int) -> dict | None:
+        return next((r for r in self.store.replies_for(lead_id) if not r.get("category")), None)
+
+    def open_bounce(self, lead_id: int) -> dict | None:
+        return next((r for r in self.store.replies_for(lead_id)
+                     if r.get("category") == "bounce" and not r.get("handled_at")), None)
+
+    def next_touch(self, lead: dict) -> int:
+        """Which message number a new draft for this lead would be. Refuses when no draft is allowed now."""
+        lid, status = lead["id"], lead["status"]
+        if status in DRAFT_STATES:
+            return 1
+        if status not in FOLLOWUP_STATES:
+            raise InvalidMove(f"lead #{lid} is '{status}'. A first draft needs: {', '.join(DRAFT_STATES)}; "
+                              f"a follow-up needs: {', '.join(FOLLOWUP_STATES)} and a due follow-up.")
+        waiting = self.unsorted_reply(lid)
+        if waiting:
+            raise InvalidMove(f"reply R{waiting['id']} of lead #{lid} is not sorted yet. Run /sync first.")
+        touch = len(self.sent_messages(lid)) + 1
+        limit = fu.max_touches(self.cadence, self.policy)
+        if touch > limit:
+            raise CapReached(f"lead #{lid} already had {touch - 1} messages (max {limit} touches). No more follow-ups.")
+        if not self.due_follow_up(lid):
+            nxt = [f for f in self.pending_follow_ups(lid) if f["kind"] in ("followup", "nurture")]
+            when = f" Next one is due {str(nxt[0]['due_on'])[:10]}." if nxt else ""
+            raise InvalidMove(f"lead #{lid} is '{status}' and no follow-up is due today.{when}")
+        return touch
+
+    def mark_sent(self, message_id: int, gmail_message_id: str | None = None, sent_at: str | None = None,
+                  actor: str = "human") -> str:
+        """Ahmad pressed Send (seen by /sync in Gmail, or told by hand for LinkedIn / Upwork...)."""
+        msg = self.get_message(message_id)
+        if msg.get("sent_at"):
+            raise InvalidMove(f"M{msg['id']} is already marked as sent ({to_local(msg['sent_at'], self.tz)}).")
+        self._must_be_latest(msg)
+        if self.valid_approval(msg) is None:
+            raise InvalidMove(f"M{msg['id']} has no valid approval from Ahmad. Only approved messages are tracked.")
+        lead = self.get(msg["opportunity_id"])
+        lid, touch = lead["id"], int(msg.get("touch_number") or 1)
+        if touch == 1 and lead["status"] != "approved":
+            raise InvalidMove(f"lead #{lid} is '{lead['status']}'. The first message needs status approved.")
+        if touch > 1 and lead["status"] not in FOLLOWUP_STATES:
+            raise InvalidMove(f"lead #{lid} is '{lead['status']}'. A follow-up needs: {', '.join(FOLLOWUP_STATES)}.")
+        when = self.now()
+        if sent_at:
+            try:
+                when = datetime.fromisoformat(sent_at.strip().replace("Z", "+00:00"))
+            except ValueError:
+                raise DeskError(f"--sent-at '{sent_at}' must be like 2026-10-05 or 2026-10-05T10:30") from None
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=self.tz) if len(sent_at.strip()) > 10 else \
+                    datetime.combine(when.date(), datetime.min.time(), self.tz).replace(hour=12)
+            if when > self.now() + timedelta(minutes=5):
+                raise DeskError(f"--sent-at {sent_at} is in the future")
+        fields = {"sent_at": when.astimezone(timezone.utc).isoformat(timespec="seconds")}
+        if gmail_message_id and gmail_message_id.strip():
+            fields["gmail_message_id"] = gmail_message_id.strip()
+        self.store.update_message(msg["id"], fields)
+        for f in self.pending_follow_ups(lid):
+            if f["kind"] in ("followup", "nurture"):
+                self.store.update_follow_up(f["id"], {"status": "done"})
+        person = self.recipient(lead) or {}
+        self.store.add_event("message_sent", actor, lid,
+                             {"message_id": msg["id"], "touch": touch, "channel": msg.get("channel"),
+                              "to": person.get("email") if msg.get("channel") == "email" else None})
+        if touch == 1:
+            self.store.change_status(lid, "approved", "contacted", f"Ahmad sent M{msg['id']}", actor, None)
+        self.sync_lead(self.get(lid))
+        nxt = [f for f in self.pending_follow_ups(lid) if f["kind"] == "followup"]
+        text = f"M{msg['id']} marked as sent (touch {touch}). Lead #{lid} is {self.get(lid)['status']}."
+        if nxt:
+            text += f" Next follow-up due {str(nxt[0]['due_on'])[:10]}."
+        return text
+
+    def draft_missing(self, message_id: int, actor: str = "role:sync") -> None:
+        """The Gmail draft is gone but was not sent (Ahmad deleted it). The approval stays; export can run again."""
+        msg = self.get_message(message_id)
+        if not msg.get("gmail_draft_id"):
+            raise InvalidMove(f"M{msg['id']} has no Gmail draft saved.")
+        if msg.get("sent_at"):
+            raise InvalidMove(f"M{msg['id']} was sent; it is not missing.")
+        self.store.update_message(msg["id"], {"gmail_draft_id": None, "thread_id": None})
+        self.store.add_event("gmail_draft_missing", actor, msg["opportunity_id"],
+                             {"message_id": msg["id"], "old_draft_id": msg["gmail_draft_id"]})
+
+    def log_reply(self, lead_id: int, text: str, *, gmail_message_id: str | None = None, sender: str | None = None,
+                  subject: str | None = None, received_at: str | None = None,
+                  actor: str = "role:sync") -> tuple[int, str | None, list[str], bool]:
+        """Saves one reply. The fixed rules run at once: opt-out and bounce are acted on immediately.
+        Returns (reply id, rule result or None, what the code did, new)."""
+        lead = self.get(lead_id)
+        body = (text or "").replace("\r\n", "\n").strip()
+        if not body:
+            raise DeskError("the reply text is empty")
+        gid = (gmail_message_id or "").strip() or None
+        if gid:
+            old = self.store.find_reply_by_gmail_id(gid)
+            if old:
+                return old["id"], old.get("category"), [], False
+        sent = self.sent_messages(lead_id)
+        if not sent:
+            raise InvalidMove(f"nothing was sent to lead #{lead_id} yet. Mark the message as sent first "
+                              "(desk.py mark-sent M<id>).")
+        rule = rp.quick_class(body, sender, subject)
+        row = {"opportunity_id": lead_id, "message_id": sent[-1]["id"], "body": body, "objections": [],
+               "gmail_message_id": gid, "sender": (sender or "").strip() or None,
+               "subject": (subject or "").strip() or None}
+        if rule in ("opt_out", "bounce"):
+            row.update(category=rule, next_action="block")
+        rid = self.store.add_reply(row)
+        self.store.add_event("reply_logged", actor, lead_id,
+                             {"reply_id": rid, "rule": rule, "gmail_message_id": gid, "received_at": received_at})
+        done: list[str] = []
+        if rule in ("opt_out", "bounce"):
+            done = self._apply_reply(lead, self.store.get_reply(rid), rule, None, "code:replies")
+        return rid, rule, done, True
+
+    def classify_reply(self, reply_id: int, *, category: str, next_action: str, note: str,
+                       objections: list[str] | None = None, asked: str | None = None,
+                       follow_up_date: str | None = None, actor: str = "role:reply-reader") -> tuple[str, list[str]]:
+        """The reply reader's result. The fixed rules win for opt-out and bounce.
+        Returns (final category, notes about what the code did)."""
+        category = (category or "").strip().lower()
+        next_action = (next_action or "").strip().lower()
+        if category not in rp.CATEGORIES:
+            raise DeskError(f"unknown category '{category}'. Use: {', '.join(rp.CATEGORIES)}")
+        if next_action not in rp.NEXT_ACTIONS:
+            raise DeskError(f"unknown next action '{next_action}'. Use: {', '.join(rp.NEXT_ACTIONS)}")
+        if not (note or "").strip():
+            raise DeskError("a note is required (--note TEXT): why this category")
+        their_date = None
+        if follow_up_date:
+            try:
+                their_date = qc.parse_date(follow_up_date)
+            except ValueError:
+                raise DeskError(f"--date '{follow_up_date}' must be YYYY-MM-DD") from None
+        reply = self.store.get_reply(reply_id)
+        if not reply:
+            raise NotFound(f"reply R{reply_id} not found")
+        lead = self.get(reply["opportunity_id"])
+        notes: list[str] = []
+        already = reply.get("category") in ("opt_out", "bounce")
+        if already:
+            final = reply["category"]
+            if category != final:
+                notes.append(f"the fixed rules already said {final}; kept {final}")
+        elif reply.get("classified_at"):
+            raise InvalidMove(f"R{reply_id} is already sorted as '{reply.get('category')}'. "
+                              "Ahmad can change the lead by hand (desk.py move).")
+        else:
+            rule = rp.quick_class(reply["body"], reply.get("sender"), reply.get("subject"))
+            final = category
+            if rule in ("opt_out", "bounce") and category != rule:
+                final = rule
+                notes.append(f"the fixed rules found {rule} -> {rule} (not {category})")
+        action = next_action if final == category else "block"
+        self.store.update_reply(reply_id, {
+            "category": final, "objections": [o.strip() for o in objections or [] if o and o.strip()],
+            "requested_action": (asked or "").strip() or None,
+            "follow_up_date": their_date.isoformat() if their_date else None, "next_action": action,
+            "note": note.strip(), "classified_at": self.now().isoformat(timespec="seconds")})
+        self.store.add_event("reply_classified", actor, lead["id"],
+                             {"reply_id": reply_id, "category": final, "agent_category": category,
+                              "next_action": action})
+        if not already:
+            notes += self._apply_reply(lead, self.store.get_reply(reply_id), final, their_date, actor)
+        return final, notes
+
+    def reply_done(self, reply_id: int, note: str, actor: str = "human") -> None:
+        """Ahmad answered (or decided) this reply; /today stops showing it."""
+        if not (note or "").strip():
+            raise DeskError("a note is required (--note TEXT): what you did")
+        reply = self.store.get_reply(reply_id)
+        if not reply:
+            raise NotFound(f"reply R{reply_id} not found")
+        if reply.get("handled_at"):
+            raise InvalidMove(f"R{reply_id} is already done.")
+        self._handled(reply, note.strip(), actor)
+
+    def _handled(self, reply: dict, note: str, actor: str) -> None:
+        old = (reply.get("note") or "").strip()
+        self.store.update_reply(reply["id"], {"handled_at": self.now().isoformat(timespec="seconds"),
+                                              "note": f"{old} | {note}" if old else note})
+        self.store.add_event("reply_handled", actor, reply["opportunity_id"], {"reply_id": reply["id"], "note": note})
+
+    def _cancel_pending(self, lead_id: int, reason: str, kinds=("followup", "nurture", "stale_check")) -> list[str]:
+        out = []
+        for f in self.pending_follow_ups(lead_id):
+            if f["kind"] in kinds:
+                self.store.update_follow_up(f["id"], {"status": "cancelled"})
+                out.append(f"cancelled {f['kind']} due {str(f['due_on'])[:10]} ({reason})")
+        return out
+
+    def _try_move(self, lead_id: int, new: str, reason: str, actor: str) -> str | None:
+        status = self.get(lead_id)["status"]
+        if new not in TRANSITIONS.get(status, set()):
+            return None
+        self.store.change_status(lead_id, status, new, reason, actor, reason if new in END_STATES else None)
+        return f"lead #{lead_id}: {status} -> {new}"
+
+    def _apply_reply(self, lead: dict, reply: dict, category: str, their_date: date | None, actor: str) -> list[str]:
+        """What the code does for each kind of reply. Never sends anything."""
+        lid, rid, out = lead["id"], reply["id"], []
+        person = self.recipient(lead) or {}
+        if category == "opt_out":
+            emails = {(person.get("email") or "").lower()}
+            m = EMAIL_RE.search(reply.get("sender") or "")
+            if m and not rp.BOUNCE_SENDER.search(reply.get("sender") or ""):
+                emails.add(m.group(0).lower())
+            for e in sorted(x for x in emails if x):
+                _, _, added, _ = self.block(e, f"opt_out (reply R{rid})", actor)
+                out.append(f"blocked {e}" if added else f"{e} was already blocked")
+            out += self._cancel_pending(lid, "opt-out")
+            moved = self._try_move(lid, "opted_out", f"opt-out in reply R{rid}", actor)
+            out += [moved] if moved else []
+            self._handled(reply, "opt-out: blocked, never contact again", actor)
+        elif category == "bounce":
+            if person.get("email"):
+                _, _, added, _ = self.block(person["email"], f"bounce (reply R{rid})", actor)
+                self.store.update_person(person["id"], {"email_status": "invalid"})
+                out.append(f"blocked {person['email']} (bounce), contact P{person['id']} email marked invalid")
+            out += self._cancel_pending(lid, "bounce")
+            out.append(f"find a new contact (desk.py set-contact {lid} ...) or close it "
+                       f"(desk.py move {lid} no_response --reason bounce)")
+        elif category == "out_of_office":
+            new_due = fu.after_out_of_office(self.today(), their_date, self.cadence)
+            for f in self.pending_follow_ups(lid):
+                if f["kind"] == "followup" and str(f["due_on"])[:10] < new_due.isoformat():
+                    self.store.update_follow_up(f["id"], {"due_on": new_due.isoformat()})
+                    out.append(f"follow-up moved to {new_due} (out of office)")
+            self._handled(reply, "out of office: follow-up moved", actor)
+        elif category == "not_now":
+            moved = self._try_move(lid, "replied", f"reply R{rid}: not now", actor)
+            out += [moved] if moved else []
+            out += self._cancel_pending(lid, "not now")
+            due = fu.nurture_on(self.today(), their_date, self.cadence)
+            self.store.add_follow_up({"opportunity_id": lid, "due_on": due.isoformat(), "kind": "nurture",
+                                      "touch_number": None, "status": "pending"})
+            out.append(f"reminder to try again on {due}")
+            self._handled(reply, f"not now: reminder {due}", actor)
+        elif category == "not_interested":
+            for new in ("replied", "lost"):
+                moved = self._try_move(lid, new, f"reply R{rid}: not interested", actor)
+                out += [moved] if moved else []
+            out += self._cancel_pending(lid, "not interested")
+            self._handled(reply, "not interested: closed", actor)
+        else:
+            moved = self._try_move(lid, "replied", f"reply R{rid}: {category}", actor)
+            out += [moved] if moved else []
+            out += self._cancel_pending(lid, "they replied", kinds=("followup",))
+            out.append("your move: answer them yourself, then desk.py reply-done "
+                       f"{rid} --note \"what you did\"")
+        return out
+
+    def sync_lead(self, lead: dict, dry_run: bool = False) -> list[str]:
+        """Makes the follow-up timers of one lead right. Safe to run many times."""
+        lid, status = lead["id"], lead["status"]
+        pending = self.pending_follow_ups(lid)
+        out: list[str] = []
+
+        def cancel(rows, reason):
+            for f in rows:
+                if not dry_run:
+                    self.store.update_follow_up(f["id"], {"status": "cancelled"})
+                out.append(f"#{lid}: cancelled {f['kind']} due {str(f['due_on'])[:10]} ({reason})")
+
+        if status in END_STATES:
+            cancel(pending, f"lead is {status}")
+            return out
+        if status != "contacted":
+            if status != "replied":
+                cancel([f for f in pending if f["kind"] == "followup"], f"lead is {status}")
+            else:
+                cancel([f for f in pending if f["kind"] == "followup"], "they replied")
+            return out
+        sent = self.sent_messages(lid)
+        if not sent:
+            return out
+        replies = self.store.replies_for(lid)
+        followups = [f for f in pending if f["kind"] == "followup"]
+        if any(not r.get("category") for r in replies):
+            return out                       # paused until /sync sorts the reply
+        new_contact = False
+        bounce = next((r for r in replies if r.get("category") == "bounce" and not r.get("handled_at")), None)
+        if bounce:
+            person = self.recipient(lead) or {}
+            email = person.get("email")
+            if email and person.get("email_status") in EMAIL_OK and not self.is_blocked(email):
+                new_contact = True
+                if not dry_run:
+                    self._handled(bounce, f"new contact P{person['id']} {email}", "code:followups")
+                out.append(f"#{lid}: bounce solved, new contact {email}")
+            else:
+                cancel(followups, "bounced, no new contact yet")
+                return out
+        touches = len(sent)
+        first, last = self.local_date(sent[0]["sent_at"]), self.local_date(sent[-1]["sent_at"])
+        today = self.today()
+        due = None if touches >= fu.max_touches(self.cadence, self.policy) else \
+            fu.next_touch_due(first, last, touches, self.cadence, self.policy)
+        if due is None:
+            cancel(followups, "max touches")
+            close_on = fu.no_response_on(last, self.cadence)
+            if today >= close_on and not [f for f in pending if f["kind"] == "nurture"]:
+                if not dry_run:
+                    self.store.change_status(lid, "contacted", "no_response",
+                                             f"no reply after {touches} messages", "code:followups",
+                                             f"no reply after {touches} messages")
+                out.append(f"#{lid}: contacted -> no_response (no reply after {touches} messages)")
+            return out
+        if new_contact:
+            due = today
+        want = touches + 1
+        cancel([f for f in followups if f.get("touch_number") != want], "old touch")
+        have = [f for f in followups if f.get("touch_number") == want]
+        if new_contact and have:
+            for f in have:
+                if str(f["due_on"])[:10] > due.isoformat() and not dry_run:
+                    self.store.update_follow_up(f["id"], {"due_on": due.isoformat()})
+        if not have:
+            if not dry_run:
+                self.store.add_follow_up({"opportunity_id": lid, "due_on": due.isoformat(), "kind": "followup",
+                                          "touch_number": want, "status": "pending"})
+            out.append(f"#{lid}: follow-up {want} due {due}")
+        return out
+
+    def sync_followups(self, dry_run: bool = False) -> list[str]:
+        """Timers for all leads: create the next follow-up, stop them, close leads with no reply."""
+        pending = {f["opportunity_id"] for f in self.store.list_follow_ups("pending")}
+        out: list[str] = []
+        for lead in self.store.list_leads():
+            if lead["status"] in FOLLOWUP_STATES or lead["id"] in pending:
+                out += self.sync_lead(lead, dry_run=dry_run)
+        return out
+
 
 def _same_page(a: str, b: str) -> bool | None:
     """True/False if two URLs are the same page (ignores http/https, www, trailing slash, #part)."""
@@ -713,6 +1450,14 @@ def _same_page(a: str, b: str) -> bool | None:
         return key(a) == key(b)
     except ValueError:
         return None
+
+
+def message_id(text) -> int:
+    """'12' or 'M12' -> 12."""
+    try:
+        return int(str(text).strip().upper().removeprefix("M"))
+    except ValueError:
+        raise DeskError(f"'{text}' is not a draft id (like 12 or M12)") from None
 
 
 def open_store(backend: str | None = None, db_path: Path | None = None, env_file: Path | None = None) -> Store:

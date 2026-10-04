@@ -61,3 +61,45 @@ Record every change from docs/PLAN.md here: date, what changed, why.
   (PLAN.md says "store each factor and its explanation"). Applied to Supabase with the MCP.
 - 2026-10-04 (Stage 4): cards are static files (`cards/*.md`, `cards/index.html`), not the FastAPI dashboard from
   PLAN.md Phase 4. The dashboard is Stage 8.
+
+- 2026-10-04 (Stage 5, Ahmad's choice): `config_check --strict` blocks only the **export** step (Gmail draft /
+  copy-paste file). Writing, critic review and approval work before the offer is decided, so drafts can be tested.
+- 2026-10-04 (Stage 5, Ahmad's choice): Gmail drafts through the **claude.ai Gmail connector**, not an own Python
+  Gmail API script. Python checks and prints the draft; Claude calls `create_draft` + `label_thread`. No new package,
+  no Google Cloud setup. guard.py already blocks `send_message` and `forward`; settings.json denies `reply`.
+- 2026-10-04 (Stage 5): the email footer is **added by code** at export (policy.yaml template + me.yaml), not stored
+  in the draft. Why: the address can be filled later without re-writing or re-approving drafts. The approval hash
+  covers subject + text (what Ahmad judges); the footer is fixed policy text.
+- 2026-10-04 (Stage 5): `max_first_emails_per_day` is counted on Gmail drafts made today (the system never sends,
+  so the draft is the closest point to sending that code controls).
+- 2026-10-04 (Stage 5): "max 2 rewrites" = max 3 saved drafts per lead per day, enforced in `save-draft`.
+- 2026-10-04 (Stage 5): Ahmad rejecting a draft keeps the lead open (`draft_ready`); `--close-lead` moves it to
+  `rejected`. Ahmad's edit is saved as a new draft (the old one is kept) and needs no critic.
+- 2026-10-04 (Stage 5): no table change; draft state comes from `messages.critic`, `approvals` and events.
+  `PERSONAL_EMAIL_DOMAINS` moved from rank.py to checks.py (one list for both).
+- 2026-10-04 (Stage 5): the writer agent got the Write tool, only for `data/drafts/` (multi-line text files are
+  safer than quoting long text on the Windows command line).
+
+- 2026-10-04 (Stage 6, Ahmad's choice): bounce → block the email, lead stays `contacted`, /today asks Ahmad to find
+  a new contact or close it. `set-contact` is allowed on a contacted lead after a bounce.
+- 2026-10-04 (Stage 6, Ahmad's choice): after the last touch, no reply for 10 business days → `no_response`
+  automatically (`no_response_after_business_days` in cadence.yaml).
+- 2026-10-04 (Stage 6, Ahmad's choice): opt-out blocks the **email** (recipient + the reply's sender), not the whole
+  domain, and closes the lead (`opted_out`).
+- 2026-10-04 (Stage 6, Ahmad's choice): no reply-draft pipeline. Ahmad answers positive replies himself; /today
+  shows them until `desk.py reply-done`.
+- 2026-10-04 (Stage 6): no new statuses. "Stale" and "bounced" are /today lists, not statuses. Follow-ups keep the
+  lead `contacted`; drafting, review and approval of touch 2-5 do not change the status.
+- 2026-10-04 (Stage 6): follow-up dates count business days (Mon-Fri) from the **first** sent message (cadence.yaml),
+  with a min gap of 2 business days after the last one. Due dates are saved in `follow_ups`.
+- 2026-10-04 (Stage 6): fixed rules (`scripts/replies.py`) beat the reply-reader for opt-out and bounce; a short
+  "no" is an opt-out (our footer promises it). Quoted text is cut first, so our own footer cannot trigger it.
+- 2026-10-04 (Stage 6): Gmail is read with the claude.ai connector in `/sync` (get_thread, list_drafts,
+  search_threads), like Stage 5. Python never talks to Gmail. Email follow-ups are drafts in the same thread
+  (`replyToMessageId`); a new contact after a bounce gets a new thread.
+- 2026-10-04 (Stage 6): `replies` table got 6 columns (gmail_message_id unique for de-duplication, sender, subject,
+  next_action, note, handled_at). Applied with the Supabase MCP (migration `stage6_replies`).
+- 2026-10-04 (Stage 6): `max_first_emails_per_day` counts only first messages (touch 1); follow-ups use
+  `max_drafts_per_day` and the 5-touch limit.
+- 2026-10-04 (Stage 6): `/sync` and `log-reply` save reply text in `data/replies/` (git-ignored).
+

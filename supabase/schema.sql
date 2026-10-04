@@ -164,6 +164,17 @@ end $$;
 -- Stage 4: ranking reasons (fit/value why, gate results, one-line "why")
 alter table opportunities add column if not exists rank_info jsonb not null default '{}'::jsonb;
 
+-- Stage 6: replies read from Gmail (or pasted by Ahmad), sorted by the reply reader
+alter table replies add column if not exists gmail_message_id text;   -- the same Gmail message is saved once
+alter table replies add column if not exists sender text;
+alter table replies add column if not exists subject text;
+alter table replies add column if not exists next_action text;
+alter table replies add column if not exists note text;
+alter table replies add column if not exists handled_at timestamptz;  -- Ahmad (or the code) dealt with it
+create unique index if not exists replies_gmail_message_id_idx on replies(gmail_message_id);
+create index if not exists replies_opportunity_idx on replies(opportunity_id);
+create index if not exists follow_ups_opportunity_idx on follow_ups(opportunity_id);
+
 create index if not exists evidence_opportunity_idx on evidence(opportunity_id);
 create index if not exists opportunities_status_idx on opportunities(status);
 create index if not exists events_opportunity_idx on events(opportunity_id);

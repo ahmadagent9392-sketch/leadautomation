@@ -45,6 +45,10 @@ def test_blocked(tool, tool_input):
     ("mcp__claude_ai_Gmail__create_draft", {"to": "a@example.com"}),
     ("mcp__claude_ai_Gmail__update_draft", {}),
     ("mcp__claude_ai_Gmail__search_threads", {}),
+    # Stage 6: follow-up draft in the same thread, and the read-only tools /sync uses
+    ("mcp__claude_ai_Gmail__create_draft", {"to": ["a@example.com"], "body": "hi", "replyToMessageId": "g-1"}),
+    ("mcp__claude_ai_Gmail__get_thread", {"threadId": "t-1", "messageFormat": "PLAIN_TEXT"}),
+    ("mcp__claude_ai_Gmail__list_drafts", {}),
     ("Read", {"file_path": "README.md"}),
     ("Bash", {"command": "python -m pytest -q"}),
     ("WebFetch", {"url": "https://example.com"}),
@@ -85,3 +89,31 @@ def test_script_allows_draft_with_exit_code_0():
 
 def test_script_ignores_bad_json():
     assert run_guard_script("not json").returncode == 0
+
+
+# ---------- Stage 5: every tool the claude.ai Gmail connector exposes (list seen on 2026-10-04) ----------
+GMAIL = "mcp__claude_ai_Gmail__"
+GMAIL_TOOLS = (
+    "apply_sensitive_message_label", "apply_sensitive_thread_label", "create_draft", "create_label",
+    "delete_draft", "delete_label", "forward", "get_draft", "get_message", "get_thread", "label_message",
+    "label_thread", "list_drafts", "list_labels", "mark_message_spam", "mark_thread_spam", "search_threads",
+    "send_message", "trash_message", "trash_thread", "unlabel_message", "unlabel_thread", "unmark_message_spam",
+    "unmark_thread_spam", "untrash_message", "untrash_thread", "update_draft", "update_label",
+    "update_message_labels",
+)
+GMAIL_SENDS = {"send_message", "forward"}          # the only tools that put an email out
+
+
+@pytest.mark.parametrize("action", GMAIL_TOOLS)
+def test_every_gmail_tool(action):
+    assert is_blocked(GMAIL + action) == (action in GMAIL_SENDS)
+
+
+def test_gmail_send_tools_are_in_the_list():
+    assert GMAIL_SENDS <= set(GMAIL_TOOLS)
+
+
+@pytest.mark.xfail(strict=True, reason="KNOWN GAP: a future Gmail tool named 'send_draft' would pass guard.py, "
+                                       "because any name with 'draft' is allowed. Not exposed today.")
+def test_gmail_send_draft_blocked_by_guard():
+    assert is_blocked(GMAIL + "send_draft")

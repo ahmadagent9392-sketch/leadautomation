@@ -113,6 +113,15 @@ def test_followup_days_must_be_in_order(cfg):
     assert any("small to big" in e for e in report.errors)
 
 
+def test_stage6_timer_settings_must_be_positive(cfg):
+    edit(cfg, "cadence", lambda d: d.update(stale_after_days=0, no_response_after_business_days="ten"))
+    report = config_check.run_checks(cfg)
+    assert any("'stale_after_days' must be" in e for e in report.errors)
+    assert any("'no_response_after_business_days' must be" in e for e in report.errors)
+    edit(cfg, "cadence", lambda d: [d.pop(k) for k in ("stale_after_days", "no_response_after_business_days")])
+    assert not config_check.run_checks(cfg).errors          # missing = default, fine
+
+
 def test_fixed_price_warns_when_zero(cfg):
     edit(cfg, "offer", lambda d: d["offers"][0].update(pricing="fixed", price_usd=0))
     report = config_check.run_checks(cfg)

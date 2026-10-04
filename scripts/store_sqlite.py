@@ -76,7 +76,8 @@ CREATE TABLE IF NOT EXISTS replies (
   message_id INTEGER REFERENCES messages(id),
   opportunity_id INTEGER NOT NULL REFERENCES opportunities(id),
   body TEXT NOT NULL, category TEXT, objections TEXT NOT NULL DEFAULT '[]',
-  requested_action TEXT, follow_up_date TEXT, classified_at TEXT, created_at TEXT NOT NULL
+  requested_action TEXT, follow_up_date TEXT, classified_at TEXT, created_at TEXT NOT NULL,
+  gmail_message_id TEXT, sender TEXT, subject TEXT, next_action TEXT, note TEXT, handled_at TEXT
 );
 CREATE TABLE IF NOT EXISTS follow_ups (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -109,6 +110,8 @@ CREATE INDEX IF NOT EXISTS events_opportunity_idx ON events(opportunity_id);
 CREATE INDEX IF NOT EXISTS events_type_ts_idx ON events(type, ts);
 CREATE INDEX IF NOT EXISTS follow_ups_due_idx ON follow_ups(due_on, status);
 CREATE INDEX IF NOT EXISTS people_email_idx ON people(email);
+CREATE INDEX IF NOT EXISTS replies_opportunity_idx ON replies(opportunity_id);
+CREATE INDEX IF NOT EXISTS follow_ups_opportunity_idx ON follow_ups(opportunity_id);
 CREATE TRIGGER IF NOT EXISTS events_no_update BEFORE UPDATE ON events
   BEGIN SELECT RAISE(ABORT, 'events table is append-only'); END;
 CREATE TRIGGER IF NOT EXISTS events_no_delete BEFORE DELETE ON events
@@ -125,7 +128,7 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-JSON_COLUMNS = ("depends_on", "unknowns", "payload", "rank_info")
+JSON_COLUMNS = ("depends_on", "unknowns", "payload", "rank_info", "evidence_ids", "critic", "objections")
 
 
 def _decode(row: dict | None) -> dict | None:
@@ -155,7 +158,7 @@ class SqliteStore:
         self.conn.execute("PRAGMA journal_mode = WAL")
         self.conn.executescript(SCHEMA)
         self._upgrade()
-        self.conn.execute("PRAGMA user_version = 3")
+        self.conn.execute("PRAGMA user_version = 6")
 
     def _upgrade(self) -> None:
         """Adds columns that newer stages need to an older database file. Never deletes data."""
@@ -168,6 +171,13 @@ class SqliteStore:
         if "rank_info" not in cols:   # Stage 4
             with self.conn:
                 self.conn.execute("ALTER TABLE opportunities ADD COLUMN rank_info TEXT NOT NULL DEFAULT '{}'")
+        cols = {r["name"] for r in self._all("PRAGMA table_info(replies)")}
+        with self.conn:   # Stage 6
+            for col in ("gmail_message_id", "sender", "subject", "next_action", "note", "handled_at"):
+                if col not in cols:
+                    self.conn.execute(f"ALTER TABLE replies ADD COLUMN {col} TEXT")
+            self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS replies_gmail_message_id_idx "
+                              "ON replies(gmail_message_id)")
 
     def close(self) -> None:
         self.conn.close()
@@ -311,3 +321,71 @@ class SqliteStore:
 
     def update_company(self, company_id: int, fields: dict) -> None:
         self._update("companies", company_id, {**fields, "updated_at": _now()})
+
+    # ---------- drafts and approvals (Stage 5) ----------
+    def add_message(self, row: dict) -> int:
+        return self._insert("messages", {**row, "created_at": _now()})
+
+    def get_message(self, message_id: int) -> dict | None:
+        return _decode(self._one("SELECT * FROM messages WHERE id = ?", (message_id,)))
+
+    def update_message(self, message_id: int, fields: dict) -> None:
+        self._update("messages", message_id, fields)
+
+    def messages_for(self, lead_id: int) -> list[dict]:
+        return [_decode(r) for r in self._all("SELECT * FROM messages WHERE opportunity_id = ? ORDER BY id",
+                                              (lead_id,))]
+
+    def add_approval(self, row: dict) -> int:
+        return self._insert("approvals", {**row, "decided_at": _now()})
+
+    def approvals_for(self, object_type: str, object_id: int) -> list[dict]:
+        return self._all("SELECT * FROM approvals WHERE object_type = ? AND object_id = ? ORDER BY id",
+                         (object_type, object_id))
+
+    def list_messages(self) -> list[dict]:
+        return [_decode(r) for r in self._all("SELECT * FROM messages ORDER BY id")]
+
+    def events_since(self, type_: str, since_iso: str) -> list[dict]:
+        rows = self._all("SELECT * FROM events WHERE type = ? AND ts >= ? ORDER BY id", (type_, since_iso))
+        return [_decode(r) for r in rows]
+
+    # ---------- replies and follow-ups (Stage 6) ----------
+    def update_person(self, person_id: int, fields: dict) -> None:
+        self._update("people", person_id, fields)
+
+    def add_reply(self, row: dict) -> int:
+        try:
+            return self._insert("replies", {**row, "created_at": _now()})
+        except sqlite3.IntegrityError as exc:
+            raise DuplicateLead(f"this reply is already saved ({exc}).") from exc
+
+    def get_reply(self, reply_id: int) -> dict | None:
+        return _decode(self._one("SELECT * FROM replies WHERE id = ?", (reply_id,)))
+
+    def find_reply_by_gmail_id(self, gmail_message_id: str) -> dict | None:
+        return _decode(self._one("SELECT * FROM replies WHERE gmail_message_id = ?", (gmail_message_id,)))
+
+    def update_reply(self, reply_id: int, fields: dict) -> None:
+        self._update("replies", reply_id, fields)
+
+    def replies_for(self, lead_id: int) -> list[dict]:
+        return [_decode(r) for r in self._all("SELECT * FROM replies WHERE opportunity_id = ? ORDER BY id",
+                                              (lead_id,))]
+
+    def list_replies(self) -> list[dict]:
+        return [_decode(r) for r in self._all("SELECT * FROM replies ORDER BY id")]
+
+    def add_follow_up(self, row: dict) -> int:
+        return self._insert("follow_ups", {**row, "created_at": _now()})
+
+    def update_follow_up(self, follow_up_id: int, fields: dict) -> None:
+        self._update("follow_ups", follow_up_id, fields)
+
+    def follow_ups_for(self, lead_id: int) -> list[dict]:
+        return self._all("SELECT * FROM follow_ups WHERE opportunity_id = ? ORDER BY id", (lead_id,))
+
+    def list_follow_ups(self, status: str | None = None) -> list[dict]:
+        if status:
+            return self._all("SELECT * FROM follow_ups WHERE status = ? ORDER BY due_on, id", (status,))
+        return self._all("SELECT * FROM follow_ups ORDER BY due_on, id")

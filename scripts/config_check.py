@@ -159,6 +159,11 @@ def check_cadence(cadence: dict, r: Report) -> None:
         r.error("cadence", "'followup_days' must go from small to big")
     if not is_positive_int(cadence.get("max_touches")):
         r.error("cadence", "'max_touches' must be a whole number above 0")
+    # Stage 6 timers: optional (scripts/followups.py has defaults), but must be whole numbers above 0
+    for key in ("not_now_default_days", "stale_after_days", "no_response_after_business_days",
+                "min_gap_business_days", "ooo_default_business_days"):
+        if cadence.get(key) is not None and not is_positive_int(cadence.get(key)):
+            r.error("cadence", f"'{key}' must be a whole number above 0")
 
 
 def run_checks(config_dir: Path = ROOT / "config") -> Report:

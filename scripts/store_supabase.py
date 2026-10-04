@@ -12,7 +12,8 @@ import httpx
 from db import TABLES, ConfigError, DeskError, DuplicateLead, StatusConflict
 
 # columns added after Stage 2: init reports them as missing until supabase/schema.sql is run again
-NEW_COLUMNS = (("evidence", "topic"), ("opportunities", "rank_info"))
+NEW_COLUMNS = (("evidence", "topic"), ("opportunities", "rank_info"), ("replies", "gmail_message_id"),
+               ("replies", "handled_at"))
 
 LEAD_SELECT = "*,companies(name,domain)"
 
@@ -197,6 +198,76 @@ class SupabaseStore:
 
     def update_company(self, company_id: int, fields: dict) -> None:
         self._update("companies", "id", company_id, {**fields, "updated_at": _now()})
+
+    # ---------- drafts and approvals (Stage 5) ----------
+    def add_message(self, row: dict) -> int:
+        return self._insert("messages", row)
+
+    def get_message(self, message_id: int) -> dict | None:
+        rows = self._get("messages", [("select", "*"), ("id", f"eq.{message_id}")])
+        return rows[0] if rows else None
+
+    def update_message(self, message_id: int, fields: dict) -> None:
+        self._update("messages", "id", message_id, fields)
+
+    def messages_for(self, lead_id: int) -> list[dict]:
+        return self._get("messages", [("select", "*"), ("opportunity_id", f"eq.{lead_id}"), ("order", "id")])
+
+    def add_approval(self, row: dict) -> int:
+        return self._insert("approvals", row)
+
+    def approvals_for(self, object_type: str, object_id: int) -> list[dict]:
+        return self._get("approvals", [("select", "*"), ("object_type", f"eq.{object_type}"),
+                                       ("object_id", f"eq.{object_id}"), ("order", "id")])
+
+    def list_messages(self) -> list[dict]:
+        return self._get("messages", [("select", "*"), ("order", "id")])
+
+    def events_since(self, type_: str, since_iso: str) -> list[dict]:
+        return self._get("events", [("select", "*"), ("type", f"eq.{type_}"), ("ts", f"gte.{since_iso}"),
+                                    ("order", "id")])
+
+    # ---------- replies and follow-ups (Stage 6) ----------
+    def update_person(self, person_id: int, fields: dict) -> None:
+        self._update("people", "id", person_id, fields)
+
+    def add_reply(self, row: dict) -> int:
+        resp = self._send("POST", "/replies", prefer="return=representation", json=row)
+        if resp.status_code == 409 or self._error(resp).get("code") == "23505":
+            raise DuplicateLead("this reply is already saved.")
+        return int(self._ok(resp)[0]["id"])
+
+    def get_reply(self, reply_id: int) -> dict | None:
+        rows = self._get("replies", [("select", "*"), ("id", f"eq.{reply_id}")])
+        return rows[0] if rows else None
+
+    def find_reply_by_gmail_id(self, gmail_message_id: str) -> dict | None:
+        rows = self._get("replies", [("select", "*"), ("gmail_message_id", f"eq.{gmail_message_id}")])
+        return rows[0] if rows else None
+
+    def update_reply(self, reply_id: int, fields: dict) -> None:
+        self._update("replies", "id", reply_id, fields)
+
+    def replies_for(self, lead_id: int) -> list[dict]:
+        return self._get("replies", [("select", "*"), ("opportunity_id", f"eq.{lead_id}"), ("order", "id")])
+
+    def list_replies(self) -> list[dict]:
+        return self._get("replies", [("select", "*"), ("order", "id")])
+
+    def add_follow_up(self, row: dict) -> int:
+        return self._insert("follow_ups", row)
+
+    def update_follow_up(self, follow_up_id: int, fields: dict) -> None:
+        self._update("follow_ups", "id", follow_up_id, fields)
+
+    def follow_ups_for(self, lead_id: int) -> list[dict]:
+        return self._get("follow_ups", [("select", "*"), ("opportunity_id", f"eq.{lead_id}"), ("order", "id")])
+
+    def list_follow_ups(self, status: str | None = None) -> list[dict]:
+        params = [("select", "*"), ("order", "due_on,id")]
+        if status:
+            params.append(("status", f"eq.{status}"))
+        return self._get("follow_ups", params)
 
 
 def _now() -> str:

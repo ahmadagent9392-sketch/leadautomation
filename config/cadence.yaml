@@ -1,7 +1,10 @@
-# Follow-up schedule (business days after first message)
+# Follow-up schedule (business days Mon-Fri after the FIRST message). Used by scripts/followups.py.
 followup_days: [3, 7, 14, 24]
 max_touches: 5
 each_followup_must_add: "a new fact, a mini idea, or a relevant example — never just 'bumping this'"
 stop_on: [any_reply, opt_out, bounce, max_touches, manual_stop]
-not_now_default_days: 60
-stale_after_days: 21
+not_now_default_days: 60              # "not now" with no date -> try again after this many days
+stale_after_days: 21                  # open lead with no activity -> shown in /today
+no_response_after_business_days: 10   # after the last touch, no reply -> lead closes as no_response
+min_gap_business_days: 2              # a follow-up is never sooner than this after the last message
+ooo_default_business_days: 5          # out-of-office with no return date -> follow-up moves this far
