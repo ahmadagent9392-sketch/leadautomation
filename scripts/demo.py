@@ -50,6 +50,9 @@ BUSINESSES = [
          title="Owner", pattern="missed-leads-slow-replies", quote="we lose jobs because we call back too late"),
     dict(key="sunnyside", name="Sunnyside Bakery Co (demo)", stage="in_gmail", person="Mia Invented",
          title="Owner", pattern="manual-data-entry", quote="wholesale orders are typed into invoices one by one"),
+    dict(key="willow", name="Willow Interiors (demo)", stage="in_gmail", channel="linkedin_message",
+         person="Nora Imaginary", title="Founder", pattern="missed-leads-slow-replies",
+         quote="design enquiries from Instagram wait a week for an answer"),
     dict(key="cedarlaw", name="Cedar Family Law (demo)", stage="draft_ready", person="Ana Pretend",
          title="Office Administrator", pattern="missed-leads-slow-replies",
          quote="potential clients wait two days for a call back"),
@@ -120,7 +123,7 @@ def seed_one(desk: db.Desk, b: dict, out_dir: Path) -> int:
     today = desk.today()
     site = f"https://{b['key']}.example"
     lead_id = desk.add_lead(site + "/careers", f"demo: {b.get('quote', 'found on a demo search')}",
-                            "email", company=b["name"], actor="demo")
+                            b.get("channel", "email"), company=b["name"], actor="demo")
     if b.get("idea"):
         desk.store.update_lead(lead_id, {"idea": b["idea"]})
     if not _reached(b, "researched"):
@@ -158,15 +161,17 @@ def seed_one(desk: db.Desk, b: dict, out_dir: Path) -> int:
     if not _reached(b, "draft_ready"):
         return lead_id
 
-    mid, _ = desk.save_draft(lead_id, body=_body(b), subject="your enquiries", evidence_ids=[pain],
+    mid, _ = desk.save_draft(lead_id, body=_body(b), subject="your enquiries" if b.get("channel", "email") == "email" else None,
+                             evidence_ids=[pain],
                              angle="their job post", cta="video", actor="demo")
     desk.save_review(mid, verdict="APPROVE_FOR_HUMAN", scores=GOOD, reasons=[], actor="demo")
     if not _reached(b, "in_gmail"):
         return lead_id
 
     desk.approve(mid, "approve", "demo: short and true", actor="demo")
-    desk.export_draft(mid, out_dir)
-    desk.set_gmail_draft(mid, f"demo-draft-{lead_id}", f"demo-thread-{lead_id}", actor="demo")
+    desk.export_draft(mid, out_dir)                    # email: Gmail data; other channels: copy-paste file
+    if b.get("channel", "email") == "email":
+        desk.set_gmail_draft(mid, f"demo-draft-{lead_id}", f"demo-thread-{lead_id}", actor="demo")
     if not _reached(b, "contacted"):
         return lead_id
 

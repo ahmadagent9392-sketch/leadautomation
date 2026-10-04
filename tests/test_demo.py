@@ -99,8 +99,8 @@ def test_numbers_and_pipeline(desk):
     assert total["won"] == 1 and total["meetings"] == 1
     assert total["positive"] == 2                                       # two made-up positive replies
     assert total["replies"] == 3                                        # + the opt-out
-    assert total["sent"] == 5 and total["drafted"] == 8
-    assert digest.numbers(desk, 7)["drafted"] == 8
+    assert total["sent"] == 5 and total["drafted"] == 9
+    assert digest.numbers(desk, 7)["drafted"] == 9
     counts = digest.pipeline(desk)
     assert counts["new"] == 2 and counts["won"] == 1
     assert list(counts) == [s for s in db.STATUSES if s in counts]      # status-flow order

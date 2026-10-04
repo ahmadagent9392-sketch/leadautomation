@@ -107,7 +107,7 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE TABLE IF NOT EXISTS raw_items (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  source TEXT NOT NULL CHECK (source IN ('hn','jobs','agency','gmaps','web','manual')),
+  source TEXT NOT NULL CHECK (source IN ('hn','jobs','agency','gmaps','web','manual','linkedin')),
   url TEXT NOT NULL UNIQUE, title TEXT, text TEXT NOT NULL DEFAULT '', posted_at TEXT,
   found_at TEXT NOT NULL, query TEXT, idea TEXT,
   matched TEXT NOT NULL DEFAULT '{}', extra TEXT NOT NULL DEFAULT '{}',
@@ -169,7 +169,7 @@ class SqliteStore:
         self.conn.execute("PRAGMA journal_mode = WAL")
         self.conn.executescript(SCHEMA)
         self._upgrade()
-        self.conn.execute("PRAGMA user_version = 7")
+        self.conn.execute("PRAGMA user_version = 8")
 
     def _upgrade(self) -> None:
         """Adds columns that newer stages need to an older database file. Never deletes data."""
@@ -193,6 +193,15 @@ class SqliteStore:
         if "idea" not in cols:   # Stage 7
             with self.conn:
                 self.conn.execute("ALTER TABLE opportunities ADD COLUMN idea TEXT")
+        sql = (self._one("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'raw_items'") or {}).get("sql", "")
+        if sql and "'linkedin'" not in sql:   # Stage 7b: new source 'linkedin' (copy rows into the new table)
+            with self.conn:
+                self.conn.execute("PRAGMA foreign_keys = OFF")
+                self.conn.execute("ALTER TABLE raw_items RENAME TO raw_items_before_7b")
+                self.conn.executescript(SCHEMA)
+                self.conn.execute("INSERT INTO raw_items SELECT * FROM raw_items_before_7b")
+                self.conn.execute("DROP TABLE raw_items_before_7b")
+                self.conn.execute("PRAGMA foreign_keys = ON")
 
     def close(self) -> None:
         self.conn.close()

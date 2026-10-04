@@ -138,3 +138,18 @@ Record every change from docs/PLAN.md here: date, what changed, why.
 - 2026-10-04 (Stage 8): the dashboard is stdlib `http.server` (no new package), no JavaScript, read only on the
   database. The offer is still edited in `config/offer.yaml`; the dashboard shows what is missing.
 - 2026-10-04: Stage 7b skipped for now (Ahmad asked for Stage 8 next).
+
+- 2026-10-04 (Stage 7b, Ahmad's choice): `/read-my-tab` may read LinkedIn tabs too, ONE tab Ahmad put in the Claude
+  tab group, only when he types the command (read only). Written as the only exception in CLAUDE.md (Ahmad said yes).
+  guard.py and the morning run are unchanged: no Chrome tools in unattended runs, automatic LinkedIn opening blocked.
+- 2026-10-04 (Stage 7b, Ahmad's choice): emails in Connections.csv are never read or saved. Message text is never
+  saved; only counts, last date and two-way.
+- 2026-10-04 (Stage 7b): LinkedIn contacts go through `raw_items` (new source `linkedin`, migration
+  `stage7b_linkedin_source`) and `scout.py keep-warm` (no pattern / signal needed: a contact is not a problem signal).
+  They never expire. Research must still find problem proof on the company website.
+- 2026-10-04 (Stage 7b): "Add from screen" goes straight to a lead (`scripts/screen.py add`), not through raw_items.
+  Pasted text = the proof page (snapshot); source_type manual; without a page link max WEAK_SIGNAL; never
+  CONFIRMED_FACT.
+- 2026-10-04 (Stage 7b): the dashboard now allows ONE script (the Copy button) with a new CSP nonce per page.
+  Uploads: stdlib multipart parsing (no new package), PNG/JPG by file signature, max 5 MB.
+- 2026-10-04 (Stage 7b): the dashboard's background jobs (idea search, add from screen) share one lock; one at a time.

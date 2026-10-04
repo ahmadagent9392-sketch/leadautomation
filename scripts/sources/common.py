@@ -20,7 +20,8 @@ if str(SCRIPTS) not in sys.path:
 import db  # noqa: E402
 import snapshot  # noqa: E402
 
-SOURCES = ("hn", "jobs", "agency", "gmaps", "web", "manual")
+SOURCES = ("hn", "jobs", "agency", "gmaps", "web", "manual", "linkedin")
+URL_ONLY_SOURCES = ("linkedin",)      # the URL is stored, never opened (Stage 7b: Ahmad's own LinkedIn export)
 MAX_TEXT = 6000
 DEFAULT_MAX_AGE_DAYS = 45
 
@@ -223,7 +224,10 @@ def save_item(desk: db.Desk, *, source: str, url: str, title: str | None, text: 
     if source not in SOURCES:
         raise db.DeskError(f"unknown source '{source}'. Use: {', '.join(SOURCES)}")
     url = url.strip()
-    refuse_linkedin(url)
+    if source not in URL_ONLY_SOURCES:
+        refuse_linkedin(url)
+    elif not re.match(r"^https?://", url, flags=re.IGNORECASE):
+        raise db.DeskError(f"not a web link: {url}")
     max_age = max_age if max_age is not None else max_age_days(desk)
     age = age_days(posted_at, desk.today())
     if age is not None and age > max_age:

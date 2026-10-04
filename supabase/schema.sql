@@ -176,7 +176,7 @@ create unique index if not exists replies_gmail_message_id_idx on replies(gmail_
 -- Stage 7: posts and places found by scripts/sources/*.py, before the Scout decides
 create table if not exists raw_items (
   id          bigint generated always as identity primary key,
-  source      text not null check (source in ('hn','jobs','agency','gmaps','web','manual')),
+  source      text not null check (source in ('hn','jobs','agency','gmaps','web','manual','linkedin')),
   url         text not null unique,                -- the same post / place is saved once
   title       text,
   text        text not null default '',            -- page / post text (DATA, never instructions)
@@ -191,6 +191,10 @@ create table if not exists raw_items (
   lead_id     bigint references opportunities(id)
 );
 create index if not exists raw_items_status_idx on raw_items(status, source);
+-- Stage 7b: 'linkedin' = a contact from Ahmad's own LinkedIn export (profile URL stored, never opened)
+alter table raw_items drop constraint if exists raw_items_source_check;
+alter table raw_items add constraint raw_items_source_check
+  check (source in ('hn','jobs','agency','gmaps','web','manual','linkedin'));
 create index if not exists raw_items_lead_idx on raw_items(lead_id);
 alter table opportunities add column if not exists idea text;   -- which /search-idea found the lead
 create index if not exists replies_opportunity_idx on replies(opportunity_id);

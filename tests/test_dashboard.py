@@ -135,9 +135,9 @@ def test_search_refused_while_busy_or_stopped(real_app, tmp_path):
         real_app.start_search("dental clinics")
     daily.free_lock(tmp_path / "logs", daily.LOCK_NAME)
     daily.take_lock(tmp_path / "logs", daily.SEARCH_LOCK_NAME, what="other idea")
-    with pytest.raises(db.DeskError, match="another idea search"):
+    with pytest.raises(db.DeskError, match="another background job"):
         real_app.start_search("dental clinics")
-    assert "Searching" in real_app.page() and "http-equiv='refresh'" in real_app.page()
+    assert "Working" in real_app.page() and "http-equiv='refresh'" in real_app.page()
     daily.free_lock(tmp_path / "logs", daily.SEARCH_LOCK_NAME)
     (tmp_path / "STOP").write_text("")
     with pytest.raises(db.DeskError, match="STOP"):
@@ -211,6 +211,7 @@ def test_post_bad_idea_shows_message(server):
     assert "Search not started" in html
 
 
-def test_page_has_no_scripts(real_app):
+def test_only_script_is_the_copy_button(real_app):
     html = real_app.page()
-    assert not re.search(r"<script", html, re.I)
+    assert len(re.findall(r"<script", html, re.I)) == 1
+    assert dashboard.NONCE_RE.search(html) and "navigator.clipboard" in html

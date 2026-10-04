@@ -12,6 +12,7 @@ Claude Code updates this file at the end of every stage.
 | 5 | Writer + Critic + Gmail drafts | built, waiting for Ahmad's checks | 2026-10-04 |
 | 6 | Follow-ups + reply reader | built, waiting for Ahmad's checks | 2026-10-04 |
 | 7 | Scout: automatic finding | built, waiting for Ahmad's checks (Places key for reviews) | 2026-10-04 |
+| 7b | Work with my screen (LinkedIn export, paste/screenshot, read my tab) | built, waiting for Ahmad's checks | 2026-10-04 |
 | 8 | Daily run + dashboard + schedule | built, waiting for Ahmad's checks (3 mornings) | 2026-10-04 |
 | 9 | Use for 2–3 weeks + weekly report | not started | |
 
@@ -439,3 +440,62 @@ python scripts/daily.py check                        # "OK to run."
 
 **Next:** Ahmad does the checks above for 3 mornings, then `git commit -m "stage 8"`. Version 1 is complete.
 Then Stage 7b or Stage 9 when Ahmad asks.
+
+### Stage 7b — Work with my screen (2026-10-04)
+(Built after Stage 8, on Ahmad's request.)
+
+**Built**
+- **LinkedIn export → warm leads** (`/import-linkedin`):
+  - `scripts/sources/linkedin_export.py` reads your own `data/linkedin/Connections.csv` (+ `messages.csv`).
+    **Never saved: email addresses and message text.** Saved: name, position, company, connected date, profile
+    link (stored only, never opened), and "talked N times, last DATE, two-way yes/no".
+  - Warmth = role (founder/owner/CEO 3, director/head 2, manager 1) + owner role in your patterns + pattern keyword +
+    agency + talked before (two-way 3, one-way 1, last year +1). Min 3; the warmest 40 become found items (`linkedin`).
+  - `scout.py keep-warm R<id> --channel referral_ask|linkedin_message|agency_pitch --reason "..."` → lead (status new)
+    + the contact person (name, title, profile link). Daily lead cap, duplicates and block list count.
+    LinkedIn found items never expire.
+  - A warm contact is not proof of a problem: `/research` must still find proof on the company website.
+- **Add from screen** (dashboard box + `/add-from-screen FILE`):
+  - Paste text + the page link, or upload a screenshot (PNG/JPG, max 5 MB). Saved in `data/paste/screen-....txt`.
+  - Claude reads it (types out the exact words of a screenshot), then
+    `screen.py add FILE --company --channel --claim --quote --grade [--website]` makes the lead + evidence
+    (source_type manual, exact quote, today's date). The code checks the quote is in the saved text
+    (invented → UNKNOWN). No page link → max WEAK_SIGNAL. Then `/research` on the company website.
+  - Runs in the background like the idea search (same fixed tool list, token, 127.0.0.1 only).
+- **`/read-my-tab`** (your choice: LinkedIn too): reads the text of ONE tab you put in the Claude tab group, only when
+  you type the command. Only `tabs_context_mcp` + `get_page_text`; no navigating, clicking, scrolling, connecting or
+  sending. Then the same steps as "Add from screen". Never in the morning run or the dashboard.
+  CLAUDE.md has this one exception written down. guard.py is unchanged: automatic opening of LinkedIn stays blocked.
+- **Send by hand** (dashboard): approved LinkedIn / Upwork / agency / referral messages with a **Copy** button and the
+  `desk.py mark-sent M<id>` line. The Copy button is the only script on the page (new CSP nonce for every page).
+- Database: `raw_items.source` accepts `linkedin` (Supabase migration `stage7b_linkedin_source`, `schema.sql`, and an
+  automatic upgrade of old SQLite files). Security check: only the expected INFO.
+- Demo: one more made-up business (Willow Interiors, LinkedIn message ready to send by hand).
+- Tests: `test_linkedin.py`, `test_screen.py`, more in `test_guard.py`, `test_dashboard.py`, `test_demo.py`.
+- Live checks: real Supabase OK; export dry run with a made-up file OK; dashboard boxes look right in the browser.
+  The Copy button click was not confirmed: the test browser stopped answering after the click (maybe a clipboard
+  permission prompt). Please check it by hand (step 4 below).
+
+**How to test**
+```
+python -m pytest -q                       # 816 passed, 2 xfailed
+python scripts/desk.py init               # "Supabase OK, 12 tables found."
+```
+1. LinkedIn → Me → Settings & Privacy → Data privacy → Get a copy of your data → Connections (+ Messages) → download.
+   Put `Connections.csv` (and `messages.csv`) in `data/linkedin/`. In Claude Code: `/import-linkedin`.
+   Does the warm list make sense? (Check: no emails in `python scripts/scout.py pending --source linkedin`.)
+2. Dashboard → "Add from screen": paste one LinkedIn post + its link → "Add from screen". Later the lead is in
+   Today / the runs table. Then `/cards`: is it a good card?
+3. Put one tab (a job post or a LinkedIn post) in the Claude tab group (right-click the tab → Add tab to group), then
+   type `/read-my-tab`. It must read only that tab and change nothing.
+4. Copy button: delete `data/demo.db` and the `data/demo` folder yourself, run `python scripts/demo.py`, then
+   `python scripts/dashboard.py --demo` → "Send by hand" → Copy → paste in Notepad.
+
+**Known issues**
+- The Chrome tool can read only tabs in the Claude tab group, so you add the tab to the group first.
+- Reading LinkedIn pages, even one by hand, may be against LinkedIn's terms. Use `/read-my-tab` rarely.
+- Screenshot text is typed out by Claude; the quote is checked against that text, not against the picture.
+- The old `data/demo.db` does not have the new demo business (we never delete in `data/`); make the demo again (step 4).
+- Stage 5 known issues (guard gaps for `send_draft` and Apollo) are still open.
+
+**Next:** Ahmad does the checks above, then `git commit -m "stage 7b"`. Stage 9 after ~50 contacted leads.

@@ -117,3 +117,47 @@ def test_gmail_send_tools_are_in_the_list():
                                        "because any name with 'draft' is allowed. Not exposed today.")
 def test_gmail_send_draft_blocked_by_guard():
     assert is_blocked(GMAIL + "send_draft")
+
+
+# ---------- Stage 7b: work with my screen ----------
+LI = "https://www." + "linkedin.com"      # split so this file's own text never looks like a fetch
+
+
+@pytest.mark.parametrize("tool, tool_input", [
+    ("mcp__claude-in-chrome__navigate", {"url": LI + "/feed", "tabId": 1}),
+    ("mcp__claude-in-chrome__navigate", {"url": "linkedin.com/in/someone"}),
+    ("mcp__claude_ai_Apify__call-actor", {"input": {"startUrls": [LI + "/in/x"]}}),
+    ("Bash", {"command": "python -c \"import requests; requests.get('" + LI + "/in/x')\""}),
+])
+def test_linkedin_opening_still_blocked(tool, tool_input):
+    assert is_blocked(tool, tool_input)
+
+
+@pytest.mark.parametrize("tool, tool_input", [
+    # /read-my-tab: read the ONE tab Ahmad put in the Claude group (no URL in the call)
+    ("mcp__claude-in-chrome__tabs_context_mcp", {"createIfEmpty": False}),
+    ("mcp__claude-in-chrome__get_page_text", {"tabId": 7}),
+    # storing a LinkedIn link Ahmad gave (never fetched)
+    ("Bash", {"command": "python scripts/screen.py save --text-file data/paste/tab-1.txt "
+                         "--url \"" + LI + "/posts/x\" --source chrome-tab"}),
+    ("Bash", {"command": "python scripts/scout.py keep-warm R3 --channel referral_ask --reason \"talked twice\""}),
+    ("Write", {"file_path": "data/paste/tab-1.txt", "content": "URL " + LI + "/posts/x"}),
+    ("Read", {"file_path": "data/linkedin/Connections.csv"}),
+])
+def test_read_my_tab_and_stored_links_allowed(tool, tool_input):
+    assert not is_blocked(tool, tool_input)
+
+
+def test_read_my_tab_command_allows_only_two_chrome_tools():
+    text = (ROOT / ".claude" / "commands" / "read-my-tab.md").read_text(encoding="utf-8")
+    loads = text.split("select:", 1)[1].split("`", 1)[0]
+    assert sorted(loads.split(",")) == ["mcp__claude-in-chrome__get_page_text",
+                                        "mcp__claude-in-chrome__tabs_context_mcp"]
+    for words in ("no `navigate`", "no `computer`", "One tab, one read", "Never run this from `/daily-run`"):
+        assert words in text
+
+
+def test_unattended_runs_have_no_chrome_tools():
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import daily
+    assert not any("chrome" in t for t in daily.ALLOWED_TOOLS)

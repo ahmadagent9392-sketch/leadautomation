@@ -7,12 +7,15 @@ Usage:
     python scripts/dashboard.py --port 8800
 Stop it with Ctrl+C.
 
-The page reads the database; it changes nothing there. The only action is the "Search an idea" box:
-it starts `claude -p "/search-idea ..."` in the background with the same fixed tool list as the morning run
-(scripts/daily.py ALLOWED_TOOLS: nothing that sends). One search at a time, never during the morning run.
-Safety: listens on 127.0.0.1 only; the search form needs a secret token made at start (other web sites cannot
-start a search); the Host header must be 127.0.0.1 / localhost; the idea text is checked and never goes
-through a shell. All database text is HTML-escaped.
+The page reads the database; it changes nothing there. Two boxes start a background job with the same fixed
+tool list as the morning run (scripts/daily.py ALLOWED_TOOLS: nothing that sends):
+  - "Search an idea"   -> claude -p "/search-idea ..."
+  - "Add from screen"  -> pasted text / a screenshot is saved in data/paste/, then claude -p "/add-from-screen FILE"
+One background job at a time, never during the morning run.
+"Send by hand" shows approved LinkedIn / Upwork / agency / referral messages with a Copy button.
+Safety: listens on 127.0.0.1 only; every form needs a secret token made at start (other web sites cannot start a
+job); the Host header must be 127.0.0.1 / localhost; the idea text is checked and never goes through a shell;
+uploads: PNG/JPG, max 5 MB. All database text is HTML-escaped. The only script is the Copy button (CSP nonce).
 """
 from __future__ import annotations
 
@@ -34,13 +37,18 @@ import db
 import digest
 import ideas as ideas_mod
 import scout
+import screen
 import today as today_mod
+from email.parser import BytesParser
+from email.policy import HTTP
 
 HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 IDEA_RE = re.compile(r"^[A-Za-z0-9 ,.'()/+\-]{3,200}$")   # no quotes, &, |, <, >, %, ^, ! (cmd.exe)
+NONCE_RE = re.compile(r'<script nonce="([A-Za-z0-9_-]+)">')
 GOOD_STATES = ("qualified", "draft_ready", "approved", "contacted", "replied", "meeting", "proposal", "won")
 MAX_BODY = 4096
+MAX_UPLOAD = screen.MAX_IMAGE + screen.MAX_TEXT * 4 + 64 * 1024   # screenshot + text + form overhead
 
 
 def esc(text) -> str:
@@ -62,7 +70,7 @@ class App:
 
     def __init__(self, *, demo: bool = False, port: int = DEFAULT_PORT, logs: Path = daily.LOGS,
                  stop_file: Path = daily.STOP_FILE, open_store=None, desk_kwargs: dict | None = None,
-                 runner=None, claude: str | None = None) -> None:
+                 runner=None, claude: str | None = None, paste_dir: Path | None = None) -> None:
         self.demo = demo
         self.port = port
         self.logs = Path(logs)
@@ -73,33 +81,38 @@ class App:
         self.runner = runner
         self.claude = claude
         self.thread: threading.Thread | None = None
+        self.paste_dir = Path(paste_dir) if paste_dir else screen.PASTE_DIR
         self.message = ""                 # one line shown at the top after a search request
 
     # ---------- search ----------
     def searching(self) -> dict | None:
         return daily.lock_info(self.logs, daily.SEARCH_LOCK_NAME)
 
-    def start_search(self, idea_text: str, *, wait: bool = False) -> str:
+    def _check_can_start(self) -> str:
         if self.demo:
-            raise db.DeskError("search is off in demo mode")
-        idea = check_idea(idea_text)
+            raise db.DeskError("this is off in demo mode")
         if daily.lock_info(self.logs, daily.LOCK_NAME):
             raise db.DeskError("the morning run is going now. Try again when it has finished.")
         if self.stop_file.exists():
             raise db.DeskError("data/STOP exists: everything is stopped")
-        claude = self.claude or daily.find_claude()
+        if self.searching():
+            raise db.DeskError("another background job is going now. Wait for it to finish.")
+        return self.claude or daily.find_claude()
+
+    def start_job(self, kind: str, prompt: str, label: str, extra: dict, claude: str, wait: bool = False) -> None:
+        """Runs one `claude -p PROMPT` in the background (fixed tool list, logged in logs/)."""
         try:
-            daily.take_lock(self.logs, daily.SEARCH_LOCK_NAME, what=idea)
+            daily.take_lock(self.logs, daily.SEARCH_LOCK_NAME, what=label)
         except daily.RunError:
-            raise db.DeskError("another idea search is going now. Wait for it to finish.") from None
+            raise db.DeskError("another background job is going now. Wait for it to finish.") from None
         tz = db.local_tz()
         timeout = daily.settings(db.load_yaml("policy"))["timeout_minutes"]
 
         def job() -> None:
             try:
                 kw = {"runner": self.runner} if self.runner else {}
-                daily.run_claude(f"/search-idea {idea}", kind="search", tz=tz, timeout_minutes=timeout,
-                                 logs=self.logs, claude=claude, extra={"idea": idea}, **kw)
+                daily.run_claude(prompt, kind=kind, tz=tz, timeout_minutes=timeout, logs=self.logs, claude=claude,
+                                 extra=extra, **kw)
             finally:
                 daily.free_lock(self.logs, daily.SEARCH_LOCK_NAME)
 
@@ -107,7 +120,23 @@ class App:
         self.thread.start()
         if wait:
             self.thread.join()
+
+    def start_search(self, idea_text: str, *, wait: bool = False) -> str:
+        if self.demo:
+            raise db.DeskError("search is off in demo mode")
+        idea = check_idea(idea_text)
+        claude = self._check_can_start()
+        self.start_job("search", f"/search-idea {idea}", idea, {"idea": idea}, claude, wait)
         return idea
+
+    def start_screen(self, *, text: str = "", url: str = "", image: bytes | None = None, wait: bool = False) -> Path:
+        """Saves what Ahmad pasted / uploaded, then runs /add-from-screen on it."""
+        claude = self._check_can_start()
+        path = screen.save_input(text=text, url=url, image=image, source="dashboard", paste_dir=self.paste_dir)
+        rel = path.relative_to(db.ROOT).as_posix() if path.is_relative_to(db.ROOT) else path.as_posix()
+        self.start_job("screen", f"/add-from-screen {rel}", f"add from screen: {path.name}",
+                       {"file": path.name}, claude, wait)
+        return path
 
     # ---------- page ----------
     def page(self) -> str:
@@ -189,14 +218,70 @@ def _search_html(app: App) -> str:
         return "<p class='muted'>Search is off in demo mode.</p>"
     running = app.searching()
     if running:
-        return (f"<p class='busy'>Searching… \"{esc(running.get('what'))}\" (started "
-                f"{esc(db.to_local(running.get('started'), db.local_tz()))}). This page refreshes by itself. "
-                f"New leads appear under Ideas and in the Today list.</p>")
+        return _busy_html(running)
     return (f"<form method='post' action='/search'><input type='hidden' name='token' value='{esc(app.token)}'>"
             "<input name='idea' maxlength='200' required placeholder='dental clinics that need booking automation'>"
             "<button type='submit'>Search an idea</button></form>"
             "<p class='muted small'>Runs /search-idea in the background (max 10 leads). Each search uses part of "
             "your Claude subscription limit. It never sends anything.</p>")
+
+
+def _busy_html(running: dict) -> str:
+    return (f"<p class='busy'>Working… \"{esc(running.get('what'))}\" (started "
+            f"{esc(db.to_local(running.get('started'), db.local_tz()))}). This page refreshes by itself. "
+            f"New leads appear in the Today list, under Ideas, and in the runs table.</p>")
+
+
+def _screen_html(app: App) -> str:
+    if app.demo:
+        return "<p class='muted'>Off in demo mode.</p>"
+    running = app.searching()
+    if running:
+        return _busy_html(running)
+    return (f"<form method='post' action='/add-screen' enctype='multipart/form-data' class='stack'>"
+            f"<input type='hidden' name='token' value='{esc(app.token)}'>"
+            "<textarea name='text' rows='5' maxlength='20000' placeholder='Paste the text of a LinkedIn post or "
+            "profile, an Upwork job, a forum post...'></textarea>"
+            "<input name='url' type='url' maxlength='500' placeholder='Link of that page (if you have it)'>"
+            "<label class='small'>or a screenshot (PNG/JPG, max 5 MB): "
+            "<input type='file' name='image' accept='image/png,image/jpeg'></label>"
+            "<button type='submit'>Add from screen</button></form>"
+            "<p class='muted small'>Claude reads it, saves the exact words as proof, makes the lead and researches the "
+            "company website (never LinkedIn). Uses part of your Claude subscription limit. Nothing is sent.</p>")
+
+
+def _send_by_hand_html(desk: db.Desk) -> str:
+    """Approved messages for channels that are not email: Ahmad copies, pastes and sends them himself."""
+    leads = {l["id"]: l for l in desk.store.list_leads()}
+    latest: dict[int, dict] = {}
+    for m in desk.store.list_messages():
+        if m.get("direction") == "out":
+            latest[m["opportunity_id"]] = m
+    items = []
+    for lid, m in latest.items():
+        lead = leads.get(lid)
+        if not lead or lead["status"] in db.END_STATES or m.get("sent_at") or (m.get("channel") or "") == "email":
+            continue
+        if desk.draft_state(m) != "approved, copy-paste file written":
+            continue
+        text = (f"Subject: {m['subject']}\n\n" if m.get("subject") else "") + (m.get("body") or "")
+        touch = int(m.get("touch_number") or 1)
+        follow = "" if touch == 1 else f" · follow-up {touch}"
+        items.append(
+            f"<div class='box'><h3>#{lid} {esc(lead.get('company_name'))} · {esc(m.get('channel'))}{follow}</h3>"
+            f"<textarea id='msg-{m['id']}' rows='5' readonly>{esc(text)}</textarea>"
+            f"<p><button type='button' class='copy' data-target='msg-{m['id']}'>Copy</button> "
+            f"<span class='muted small'>Paste it in {esc(m.get('channel'))} and press Send yourself. Then run: "
+            f"<code>python scripts/desk.py mark-sent M{m['id']}</code></span></p></div>")
+    return "".join(items) or "<p class='empty'>Nothing to send by hand.</p>"
+
+
+# The only script on the page: the Copy buttons. Allowed by a new random nonce for every page (CSP).
+COPY_JS = """document.querySelectorAll('button.copy').forEach(function(b){b.addEventListener('click',function(){
+var t=document.getElementById(b.dataset.target);var done=function(){b.textContent='Copied';
+setTimeout(function(){b.textContent='Copy';},1500);};
+var old=function(){t.select();document.execCommand('copy');done();};
+if(navigator.clipboard){navigator.clipboard.writeText(t.value).then(done,old);}else{old();}});});"""
 
 
 def _runs_html(app: App, desk: db.Desk) -> str:
@@ -241,6 +326,9 @@ font-size:14px;display:block;overflow-x:auto}th,td{text-align:left;padding:6px 1
 vertical-align:top}td.ok{color:var(--strong)}td.bad{color:var(--warn)}
 form{display:flex;gap:8px;flex-wrap:wrap}form input[name=idea]{flex:1;min-width:220px;padding:9px 10px;
 border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--text);font:inherit}
+form.stack{flex-direction:column;align-items:stretch}form.stack input[name=url],textarea{width:100%;padding:9px 10px;
+border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--text);font:inherit}
+textarea{resize:vertical}form.stack button{align-self:flex-start}code{font-size:12px;overflow-wrap:anywhere}
 button{padding:9px 14px;border:0;border-radius:8px;background:var(--accent);color:var(--card);font:inherit;
 font-weight:600;cursor:pointer}.small{font-size:13px}.busy,.flash{background:var(--warn-bg);color:var(--warn);
 padding:8px 12px;border-radius:8px}.banner{background:var(--accent);color:var(--card);padding:10px 14px;
@@ -251,6 +339,7 @@ border-radius:8px;font-weight:700;margin:0 0 12px}
 
 def render(app: App, desk: db.Desk) -> str:
     now = desk.now().astimezone(desk.tz)
+    nonce = secrets.token_urlsafe(16)                 # new for every page; the CSP header repeats it
     refresh = "<meta http-equiv='refresh' content='15'>" if (not app.demo and app.searching()) else ""
     banner = ("<div class='banner'>DEMO - made-up businesses only. No real names, no real emails.</div>"
               if app.demo else "")
@@ -260,7 +349,9 @@ def render(app: App, desk: db.Desk) -> str:
     app.message = ""
     parts = [
         _section("Search an idea", _search_html(app), "search"),
+        _section("Add from screen", _screen_html(app), "screen"),
         _section("Today", _today_html(desk), "today"),
+        _section("Send by hand (LinkedIn, Upwork, agency, referral)", _send_by_hand_html(desk), "send"),
         _section("Pipeline", _pipeline_html(desk), "pipeline"),
         _section("Numbers", _numbers_html(desk), "numbers"),
         _section("Cards (best first)", _cards_html(desk), "cards"),
@@ -269,7 +360,7 @@ def render(app: App, desk: db.Desk) -> str:
         _section("Things to decide later", _todo_html(desk), "todo"),
     ]
     nav = "".join(f"<a href='#{sid}'>{label}</a>" for sid, label in
-                  (("today", "Today"), ("pipeline", "Pipeline"), ("numbers", "Numbers"), ("cards", "Cards"),
+                  (("today", "Today"), ("send", "Send by hand"), ("screen", "Add from screen"), ("pipeline", "Pipeline"), ("numbers", "Numbers"), ("cards", "Cards"),
                    ("ideas", "Ideas"), ("runs", "Runs"), ("todo", "To decide")))
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -283,7 +374,7 @@ def render(app: App, desk: db.Desk) -> str:
 <nav>{nav}</nav>
 {flash}
 {''.join(parts)}
-</main></body></html>
+</main><script nonce="{nonce}">{COPY_JS}</script></body></html>
 """
 
 
@@ -299,13 +390,16 @@ def make_handler(app: App):
 
         def _send(self, code: int, body: str, ctype: str = "text/html; charset=utf-8", extra: dict | None = None):
             data = body.encode("utf-8")
+            nonce = NONCE_RE.search(body) if ctype.startswith("text/html") else None
+            script = f" script-src 'nonce-{nonce.group(1)}';" if nonce else ""
             self.send_response(code)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Frame-Options", "DENY")
             self.send_header("Content-Security-Policy",
-                             "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'")
+                             "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none';"
+                             + script)
             for k, v in (extra or {}).items():
                 self.send_header(k, v)
             self.end_headers()
@@ -331,6 +425,8 @@ def make_handler(app: App):
         def do_POST(self):
             if not self._host_ok():
                 return self._send(403, "Forbidden host", "text/plain; charset=utf-8")
+            if self.path == "/add-screen":
+                return self._add_screen()
             if self.path != "/search":
                 return self._send(404, "Not found", "text/plain; charset=utf-8")
             length = int(self.headers.get("Content-Length") or 0)
@@ -346,7 +442,44 @@ def make_handler(app: App):
                 app.message = f"Search not started: {exc}"
             return self._send(303, "", extra={"Location": "/"})
 
+        def _add_screen(self):
+            length = int(self.headers.get("Content-Length") or 0)
+            if length > MAX_UPLOAD:
+                return self._send(413, "Too big (screenshot max 5 MB)", "text/plain; charset=utf-8")
+            form = parse_multipart(self.headers.get("Content-Type") or "", self.rfile.read(length))
+            token = form.get("token")
+            if not isinstance(token, str) or not secrets.compare_digest(token, app.token):
+                return self._send(403, "Bad token. Reload the page.", "text/plain; charset=utf-8")
+            image = form.get("image")
+            text, url = form.get("text"), form.get("url")
+            try:
+                path = app.start_screen(text=text if isinstance(text, str) else "",
+                                        url=url if isinstance(url, str) else "",
+                                        image=image if isinstance(image, bytes) and image else None)
+                app.message = f"Saved {path.name}. Claude is making the lead now. This page refreshes by itself."
+            except (db.DeskError, daily.RunError) as exc:
+                app.message = f"Not added: {exc}"
+            return self._send(303, "", extra={"Location": "/"})
+
     return Handler
+
+
+def parse_multipart(content_type: str, body: bytes) -> dict:
+    """multipart/form-data -> {name: str (text field) | bytes (file)}. Anything else -> {}."""
+    if not content_type.lower().startswith("multipart/form-data"):
+        return {}
+    head = f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode("latin-1", errors="replace")
+    msg = BytesParser(policy=HTTP).parsebytes(head + body)
+    if not msg.is_multipart():
+        return {}
+    out: dict = {}
+    for part in msg.iter_parts():
+        name = part.get_param("name", header="content-disposition")
+        if not name:
+            continue
+        data = part.get_payload(decode=True) or b""
+        out[name] = data if part.get_filename() is not None else data.decode("utf-8", errors="replace")
+    return out
 
 
 def serve(app: App) -> None:

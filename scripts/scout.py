@@ -4,9 +4,12 @@
 Usage:
     python scripts/scout.py pending [--source S] [--idea X] [--limit N]     JSON list for the Scout agent
     python scripts/scout.py keep RAW_ID --pattern P --signal T --channel C --reason "..." [--company NAME] [--url URL]
+    python scripts/scout.py keep-warm RAW_ID --channel referral_ask|linkedin_message|agency_pitch --reason "..."
+                                                   (Stage 7b: a contact from Ahmad's LinkedIn export)
     python scripts/scout.py reject RAW_ID --reason "..."
     python scripts/scout.py add-raw --source web --url URL --title T --text-file F [--posted YYYY-MM-DD] [--idea X]
     python scripts/scout.py expire          unused found items older than max_age_days -> expired
+                                            (LinkedIn contacts never expire: a relationship is not a news post)
     python scripts/scout.py stats           counts by source, status and idea
 
 The code enforces the rules (not only the agent): signal decay days, daily new-lead cap, max leads per idea search,
@@ -185,6 +188,48 @@ def keep(desk: db.Desk, raw_id: int, *, pattern_id: str, signal: str, channel: s
     return {"lead_id": lead_id, "snapshot": sha, "evidence": evidence, "url": lead_url}
 
 
+WARM_CHANNELS = ("referral_ask", "linkedin_message", "agency_pitch")
+
+
+def keep_warm(desk: db.Desk, raw_id: int, *, channel: str, reason: str) -> dict:
+    """A warm contact from Ahmad's LinkedIn export -> lead (status new). No problem proof yet: research finds it
+    on the company website. The profile URL is stored as the lead URL and the person's name/title are saved;
+    nothing is opened."""
+    raw = _raw(desk, raw_id)
+    if raw["source"] != "linkedin":
+        raise db.DeskError(f"R{raw_id} is from '{raw['source']}'. keep-warm is only for LinkedIn export contacts; "
+                           "use keep.")
+    if raw["status"] != "new":
+        raise db.DeskError(f"R{raw_id} is already '{raw['status']}'")
+    channel = db.normalize_channel(channel, list(desk.policy.get("channels_allowed") or []))
+    if channel not in WARM_CHANNELS:
+        raise db.DeskError(f"warm leads use {', '.join(WARM_CHANNELS)} (not {channel}): no email from the export")
+    reason = (reason or "").strip()
+    if not reason:
+        raise db.DeskError("--reason is required (why this contact is a real warm lead)")
+    extra = raw.get("extra") or {}
+    note = (f"warm contact (LinkedIn export, warmth {extra.get('warmth', '?')}); source=linkedin; found=R{raw_id}; "
+            f"reason={reason}")
+    try:
+        lead_id = desk.add_lead(raw["url"], note, channel, company=extra.get("company") or None, actor=ACTOR)
+    except db.DuplicateLead as exc:
+        desk.store.update_raw_item(raw_id, {"status": "rejected", "reason": f"duplicate: {exc}"})
+        raise
+    except db.Blocked as exc:
+        desk.store.update_raw_item(raw_id, {"status": "rejected", "reason": f"blocked: {exc}"})
+        raise
+    position = (extra.get("position") or "").strip()
+    if position:
+        top = ("founder", "owner", "ceo", "managing", "president", "principal", "partner")
+        role = "owner" if any(w in position.lower() for w in top) else None
+        desk.set_contact(lead_id, title=position, name=extra.get("name") or None, role_type=role,
+                         profile_url=raw["url"], actor=ACTOR)
+    desk.store.update_raw_item(raw_id, {"status": "kept", "lead_id": lead_id, "reason": reason})
+    desk.store.add_event("scout_kept", ACTOR, lead_id, {"raw_id": raw_id, "source": "linkedin", "idea": None,
+                                                       "warm": True, "channel": channel})
+    return {"lead_id": lead_id, "url": raw["url"], "company": extra.get("company")}
+
+
 def reject(desk: db.Desk, raw_id: int, reason: str) -> None:
     raw = _raw(desk, raw_id)
     if raw["status"] != "new":
@@ -198,6 +243,8 @@ def expire(desk: db.Desk) -> int:
     limit = common.max_age_days(desk)
     n = 0
     for raw in desk.store.list_raw_items(status="new"):
+        if raw["source"] in common.URL_ONLY_SOURCES:
+            continue
         age = common.age_days(_found_date(raw), desk.today())
         if age is not None and age > limit:
             desk.store.update_raw_item(raw["id"], {"status": "expired", "reason": f"older than {limit} days"})
@@ -272,6 +319,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--company", help="company name (Upwork / HN / Maps items)")
     p.add_argument("--url", help="use this URL for the lead (like the company's own job page)")
 
+    p = sub.add_parser("keep-warm", parents=[shared], help="make a lead from a LinkedIn export contact")
+    p.add_argument("raw_id")
+    p.add_argument("--channel", required=True, choices=WARM_CHANNELS + ("referral", "linkedin", "agency"))
+    p.add_argument("--reason", required=True, help="why this contact is a real warm lead (max 25 words)")
+
     p = sub.add_parser("reject", parents=[shared], help="not a real signal")
     p.add_argument("raw_id")
     p.add_argument("--reason", required=True)
@@ -306,6 +358,10 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"  snapshot {out['snapshot']} (post text saved for the researcher)")
             for eid, grade in out["evidence"]:
                 print(f"  evidence E{eid} review / pain / {grade}")
+        elif args.cmd == "keep-warm":
+            out = keep_warm(desk, _rid(args.raw_id), channel=args.channel, reason=args.reason)
+            print(f"KEPT {args.raw_id.upper()} -> lead #{out['lead_id']} ({out['company']}). "
+                  "Profile stored, not opened. Next: /research " + str(out["lead_id"]))
         elif args.cmd == "reject":
             reject(desk, _rid(args.raw_id), args.reason)
             print(f"REJECTED {args.raw_id.upper()}")
