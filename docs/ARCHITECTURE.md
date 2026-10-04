@@ -24,7 +24,7 @@
            job posts · your network/referrals · websites with visible problems
        │
        ▼
-  MEMORY: data/desk.db (SQLite) — companies, people, evidence (url+quote+date),
+  MEMORY: Supabase (Postgres) — companies, people, evidence (url+quote+date),
           opportunities + status, messages, replies, follow-ups, block list, events
 ```
 

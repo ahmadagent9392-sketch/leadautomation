@@ -15,7 +15,7 @@ Scout → Researcher → Checker → Rank → Writer → Critic → Human approv
 - **Evidence model**: every claim = URL + exact quote + date + grade (fact / strong / weak / guess / unknown)
 - **Maker-checker**: a separate, skeptical agent verifies the researcher's work
 - **Safety guard**: a PreToolUse hook blocks sending, posting and LinkedIn automation
-- **Memory**: SQLite with a full event history
+- **Memory**: Supabase (Postgres) with a full event history; SQLite for tests and demo
 - **Runs on a Claude subscription**, no API key
 
 ## Status

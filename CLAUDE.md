@@ -20,7 +20,7 @@ he approves, and tracks follow-ups until a result. It is also his public portfol
 - **No API key.** All AI work runs inside Claude Code on Ahmad's subscription: subagents (`.claude/agents`),
   skills (`.claude/skills`), slash commands (`.claude/commands`), hooks, MCP.
   Python scripts handle only database, dates, checks and reports. **No Anthropic SDK calls in Python.**
-- Database: SQLite at `data/desk.db`. Python 3.11+, standard library + pytest + pyyaml + httpx only,
+- Database: Supabase (Postgres, over REST with httpx; tables in `supabase/schema.sql`). SQLite (`data/*.db`) only for tests and `--demo`. Python 3.11+, standard library + pytest + pyyaml + httpx only,
   unless Ahmad approves another package.
 - Windows is the main OS. Paths and scripts must work on Windows (Git Bash and PowerShell).
 
